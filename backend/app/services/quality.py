@@ -107,19 +107,37 @@ async def call_judge(
         return 0.0
 
 
+
+
 async def embed(
     client: httpx.AsyncClient, url: str, model: str, text: str,
 ) -> list[float]:
+    full_url = f"{url.rstrip('/')}/api/embeddings"
     try:
         resp = await client.post(
-            f"{url.rstrip('/')}/api/embeddings",
+            full_url,
             json={"model": model, "prompt": text},
             timeout=60.0,
         )
-        resp.raise_for_status()
-        return resp.json().get("embedding", [])
+        if resp.is_error:
+            logger.warning(
+                "event=quality.embed.http_error url=%s model=%s status=%s body=%r",
+                full_url, model, resp.status_code, resp.text[:300],
+            )
+            return []
+        data = resp.json()
+        emb = data.get("embedding") or []
+        if not emb:
+            logger.warning(
+                "event=quality.embed.empty url=%s model=%s response_keys=%s body=%r",
+                full_url, model, list(data.keys()), resp.text[:300],
+            )
+        return emb
     except Exception as exc:
-        logger.warning("event=quality.embed.error error=%s", exc)
+        logger.warning(
+            "event=quality.embed.error url=%s model=%s exc_type=%s err=%s",
+            full_url, model, type(exc).__name__, exc or "(пусто)",
+        )
         return []
 
 
@@ -129,10 +147,15 @@ def load_gold_dataset(path) -> list[dict]:
 
 # Поля, в которых может лежать текст рекомендации внутри data dict.
 _TEXT_FIELDS_ORDERED = ("recommendation", "text", "answer", "message", "content")
-# Поля, чьё значение тоже стоит включить (короткий контекст).
-_CONTEXT_FIELDS = ("title", "reason")
-# Поля, которые игнорируем (служебные).
-_SKIP_FIELDS = {"_system", "system", "task_id", "lead_id", "type", "id"}
+# Поля, чьё значение тоже стоит включить (короткий контекст для пользователя).
+# `reason` — служебное объяснение модели «почему выбрала такую рекомендацию»,
+# в пользовательский текст не идёт, поэтому в сравнение его не включаем.
+_CONTEXT_FIELDS = ("title",)
+# Поля, которые игнорируем (служебные, не показываются пользователю).
+_SKIP_FIELDS = {
+    "_system", "system", "task_id", "lead_id", "type", "id",
+    "reason", "explanation", "rationale",
+}
 
 
 def extract_text(data) -> str:

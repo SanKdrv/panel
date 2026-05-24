@@ -80,7 +80,8 @@ def test_extract_text_picks_recommendation():
     out = q.extract_text(data)
     assert "Главный текст рекомендации" in out
     assert "Test title" in out
-    assert "Потому что" in out
+    # reason — служебное объяснение, в сравнение не идёт
+    assert "Потому что" not in out
     assert "task_id" not in out
     assert "_system" not in out
 
