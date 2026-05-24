@@ -196,16 +196,30 @@ def extract_text(data) -> str:
 
 
 async def _poll_recommendation(
-    rag: RAGClient, token: str, timeout_s: float = 600.0, poll_interval: float = 5.0,
+    rag: RAGClient, token: str, timeout_s: float = 900.0, poll_interval: float = 5.0,
 ) -> bool:
     started = time.monotonic()
+    consecutive_errors = 0
     while time.monotonic() - started < timeout_s:
         await asyncio.sleep(poll_interval)
-        data = await rag.recommendation_status(token)
-        if data.get("status") == "completed":
-            return True
-        if data.get("status") == "failed":
-            return False
+        try:
+            data = await rag.recommendation_status(token)
+            consecutive_errors = 0
+            status = data.get("status")
+            if status == "completed":
+                return True
+            if status == "failed":
+                return False
+        except Exception as exc:
+            consecutive_errors += 1
+            logger.warning(
+                "event=quality.poll.error token=%s consecutive=%d exc_type=%s err=%s",
+                token, consecutive_errors, type(exc).__name__, exc or "(пусто)",
+            )
+            if consecutive_errors >= 10:
+                logger.error("event=quality.poll.give_up token=%s", token)
+                return False
+            # продолжаем — может быть временный сетевой блип
     return False
 
 
@@ -353,6 +367,33 @@ async def find_valid_leads(
 
 # ---------- evaluation ----------
 
+async def _call_with_retry(coro_factory, *, what: str, attempts: int = 3,
+                           base_delay: float = 2.0):
+    """Вызывает coroutine-фабрику с экспоненциальным retry на сетевых ошибках.
+    coro_factory — функция, возвращающая новый awaitable при каждом вызове."""
+    last_exc: Exception | None = None
+    for i in range(1, attempts + 1):
+        try:
+            return await coro_factory()
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "event=quality.retry what=%s attempt=%d/%d exc_type=%s err=%s",
+                what, i, attempts, type(exc).__name__, exc or "(пусто)",
+            )
+            if i < attempts:
+                await asyncio.sleep(base_delay * i)
+    assert last_exc is not None
+    raise last_exc
+
+
+def _fmt_exc(exc: Exception) -> str:
+    msg = str(exc).strip()
+    if not msg:
+        msg = "(без сообщения)"
+    return f"{type(exc).__name__}: {msg}"
+
+
 async def _evaluate_one_pair(
     rag: RAGClient,
     judge_client: httpx.AsyncClient,
@@ -374,7 +415,10 @@ async def _evaluate_one_pair(
 
     t0 = time.monotonic()
     try:
-        gen = await rag.generate_recommendation(lead_id, stage)
+        gen = await _call_with_retry(
+            lambda: rag.generate_recommendation(lead_id, stage),
+            what=f"generate(lead={lead_id},stage={stage})",
+        )
         token = gen.get("token", "")
         if not token:
             return {**base, "status": "failed",
@@ -383,7 +427,10 @@ async def _evaluate_one_pair(
         if not ok:
             return {**base, "status": "failed",
                     "error": "RAG-генерация завершилась со status=failed или истёк timeout"}
-        recs = await rag.get_recommendations(lead_id)
+        recs = await _call_with_retry(
+            lambda: rag.get_recommendations(lead_id),
+            what=f"get_recommendations(lead={lead_id})",
+        )
         items = recs.get("recommendations", [])
         if not items:
             return {**base, "status": "failed",
@@ -394,8 +441,12 @@ async def _evaluate_one_pair(
             return {**base, "status": "failed",
                     "error": "не удалось извлечь текст из data (пустая рекомендация)"}
     except Exception as exc:
-        logger.warning("event=quality.gen.error lead=%s err=%s", lead_id, exc)
-        return {**base, "status": "failed", "error": f"исключение при генерации: {exc}"}
+        logger.warning(
+            "event=quality.gen.error lead=%s stage=%s exc_type=%s err=%s",
+            lead_id, stage, type(exc).__name__, exc or "(пусто)",
+        )
+        return {**base, "status": "failed",
+                "error": f"исключение при генерации: {_fmt_exc(exc)}"}
 
     duration = max(time.monotonic() - t0, 0.001)
     tokens = max(len(_tokenize(generated)), 1)
