@@ -10,6 +10,9 @@ services:
       - "${BACKEND_PORT:-8001}:8001"
     depends_on:
       - prometheus
+    volumes:
+      # История quality-прогонов (переживает рестарты)
+      - quality_runs:/app/app/data/runs
     networks:
       default:
       rag-shared:
@@ -56,3 +59,6 @@ services:
 networks:
   rag-shared:
     external: true
+
+volumes:
+  quality_runs:

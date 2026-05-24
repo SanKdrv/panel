@@ -111,14 +111,19 @@
       </div>
 
       <div v-if="task?.status === 'running'" class="mb-3">
-        <button class="btn btn-sm btn-outline-danger" @click="cancelTask">
-          <i class="bi bi-stop-circle me-1"></i>Остановить
+        <button
+          class="btn btn-sm btn-outline-danger"
+          :disabled="cancelling"
+          @click="cancelTask"
+        >
+          <i class="bi me-1" :class="cancelling ? 'bi-hourglass-split' : 'bi-stop-circle'"></i>
+          {{ cancelling ? 'Останавливается... (ждём окончания текущего шага)' : 'Остановить' }}
         </button>
       </div>
 
       <ResultBlock v-if="task?.result?.metrics" :result="task.result" />
 
-      <div v-if="task?.status === 'completed' || task?.status === 'failed'" class="mt-3">
+      <div v-if="['completed', 'failed', 'cancelled'].includes(task?.status)" class="mt-3">
         <button class="btn btn-outline-secondary" @click="restart">
           <i class="bi bi-arrow-counterclockwise me-1"></i>Новый прогон
         </button>
@@ -147,6 +152,7 @@ const selectedSet = ref({})
 
 const task = ref(null)
 const goldCount = ref(4)
+const cancelling = ref(false)
 let pollTimer = null
 
 const selectedLeads = computed(() =>
@@ -164,6 +170,7 @@ const statusBadge = computed(() => {
   const s = task.value?.status
   if (s === 'completed') return 'bg-success'
   if (s === 'failed') return 'bg-danger'
+  if (s === 'cancelled') return 'bg-warning text-dark'
   if (s === 'running') return 'bg-warning text-dark'
   return 'bg-secondary'
 })
@@ -226,9 +233,10 @@ function startPolling() {
     try {
       const data = await qualityApi.taskStatus(task.value.id)
       task.value = data
-      if (data.status === 'completed' || data.status === 'failed') {
+      if (['completed', 'failed', 'cancelled'].includes(data.status)) {
         clearInterval(pollTimer)
         pollTimer = null
+        cancelling.value = false
         localStorage.removeItem(ACTIVE_TASK_KEY)
       }
     } catch (e) {
@@ -244,11 +252,12 @@ function startPolling() {
 }
 
 async function cancelTask() {
-  if (!task.value?.id) return
+  if (!task.value?.id || cancelling.value) return
+  cancelling.value = true
   try {
     await qualityApi.cancelTask(task.value.id)
   } catch (e) {
-    /* ignore */
+    cancelling.value = false
   }
 }
 

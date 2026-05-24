@@ -70,6 +70,8 @@ export const qualityApi = {
     api.get(`/quality/tasks/${taskId}`).then((r) => r.data),
   cancelTask: (taskId) =>
     api.post(`/quality/tasks/${taskId}/cancel`).then((r) => r.data),
+  listTasks: (limit = 50) =>
+    api.get('/quality/tasks', { params: { limit } }).then((r) => r.data),
 
   latest: () => api.get('/quality/latest').then((r) => r.data),
   history: (rangeSeconds = 86400, stepSeconds = 300) =>

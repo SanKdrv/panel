@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("event=app.starting rag_backend_url=%s", settings.rag_backend_url)
+    # Подгружаем последние quality-таски из runs/
+    from .services.quality import load_history_on_startup
+    n = load_history_on_startup()
+    logger.info("event=app.starting.quality_history_loaded count=%d", n)
     yield
     logger.info("event=app.stopping")
     await shutdown_rag_client()

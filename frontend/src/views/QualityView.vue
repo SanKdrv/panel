@@ -35,6 +35,16 @@
           <i class="bi bi-graph-up me-1"></i>Тренд
         </a>
       </li>
+      <li class="nav-item">
+        <a
+          class="nav-link"
+          :class="{ active: tab === 'runs' }"
+          href="#"
+          @click.prevent="tab = 'runs'"
+        >
+          <i class="bi bi-clock-history me-1"></i>История прогонов
+        </a>
+      </li>
     </ul>
 
     <!-- ===== RUN TAB ===== -->
@@ -47,7 +57,12 @@
       <GoldSection />
     </div>
 
-    <!-- ===== HISTORY TAB ===== -->
+    <!-- ===== RUNS HISTORY TAB ===== -->
+    <div v-show="tab === 'runs'">
+      <HistorySection />
+    </div>
+
+    <!-- ===== TREND TAB ===== -->
     <div v-show="tab === 'history'">
       <div class="d-flex align-items-center justify-content-between mb-3">
         <div class="fw-semibold">Тренд метрик качества</div>
@@ -84,6 +99,7 @@ import { qualityApi } from '../api/endpoints'
 import LineChart from '../components/LineChart.vue'
 import RunSection from '../components/quality/RunSection.vue'
 import GoldSection from '../components/quality/GoldSection.vue'
+import HistorySection from '../components/quality/HistorySection.vue'
 
 const tab = ref('run')
 const historyRange = ref(86400)

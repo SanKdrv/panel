@@ -131,8 +131,8 @@ async def start_eval(
 
 
 @router.get("/tasks")
-async def list_eval_tasks() -> dict:
-    tasks = quality_service.list_tasks()
+async def list_eval_tasks(limit: int = 50) -> dict:
+    tasks = quality_service.list_tasks(limit=max(1, min(limit, 200)))
     return {"tasks": [_task_to_dict(t) for t in tasks]}
 
 

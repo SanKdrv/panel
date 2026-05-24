@@ -249,7 +249,12 @@ def extract_text(data) -> str:
 
 async def _poll_recommendation(
     rag: RAGClient, token: str, timeout_s: float = 900.0, poll_interval: float = 5.0,
-) -> bool:
+) -> str:
+    """Опрашивает статус генерации. Возвращает one of:
+    - "completed" — успех
+    - "failed"    — RAG сообщил о фейле
+    - "timeout"   — превысили общий timeout
+    - "errors"    — слишком много подряд сетевых ошибок"""
     started = time.monotonic()
     consecutive_errors = 0
     while time.monotonic() - started < timeout_s:
@@ -259,9 +264,9 @@ async def _poll_recommendation(
             consecutive_errors = 0
             status = data.get("status")
             if status == "completed":
-                return True
+                return "completed"
             if status == "failed":
-                return False
+                return "failed"
         except Exception as exc:
             consecutive_errors += 1
             logger.warning(
@@ -270,9 +275,9 @@ async def _poll_recommendation(
             )
             if consecutive_errors >= 10:
                 logger.error("event=quality.poll.give_up token=%s", token)
-                return False
+                return "errors"
             # продолжаем — может быть временный сетевой блип
-    return False
+    return "timeout"
 
 
 # ---------- services diagnostic ----------
@@ -332,7 +337,7 @@ async def _diagnose_services(
 @dataclass
 class TaskState:
     id: str
-    status: str = "queued"             # queued | running | completed | failed
+    status: str = "queued"             # queued | running | completed | failed | cancelled
     started_at: str | None = None
     finished_at: str | None = None
     total: int = 0
@@ -355,6 +360,31 @@ def get_task(task_id: str) -> TaskState | None:
 def list_tasks(limit: int = 20) -> list[TaskState]:
     items = sorted(_tasks.values(), key=lambda t: t.started_at or "", reverse=True)
     return items[:limit]
+
+
+def load_history_on_startup() -> int:
+    """Вызывается из main.py при старте бэка. Загружает последние таски
+    из runs/ в _tasks. Возвращает количество загруженных."""
+    loaded = quality_history.load_recent()
+    for d in loaded:
+        try:
+            t = TaskState(
+                id=d["id"],
+                status=d.get("status", "completed"),
+                started_at=d.get("started_at"),
+                finished_at=d.get("finished_at"),
+                total=d.get("total", 0),
+                done=d.get("done", 0),
+                current_step=d.get("current_step", ""),
+                result=d.get("result"),
+                error=d.get("error"),
+                cancelled=d.get("cancelled", False),
+                samples=d.get("samples", []),
+            )
+            _tasks[t.id] = t
+        except Exception as exc:
+            logger.warning("event=quality.history.deserialize_error err=%s", exc)
+    return len(_tasks)
 
 
 def _reset_for_tests() -> None:
@@ -475,23 +505,60 @@ async def _evaluate_one_pair(
         if not token:
             return {**base, "status": "failed",
                     "error": "RAG не вернул token при /generate"}
-        ok = await _poll_recommendation(rag, token)
-        if not ok:
-            return {**base, "status": "failed",
-                    "error": "RAG-генерация завершилась со status=failed или истёк timeout"}
-        recs = await _call_with_retry(
-            lambda: rag.get_recommendations(lead_id),
-            what=f"get_recommendations(lead={lead_id})",
-        )
+        # Снэпшот существующих рекомендаций ДО polling — чтобы потом
+        # отличить «нашу» новую от старых.
+        try:
+            pre = await rag.get_recommendations(lead_id)
+            pre_ids = {r.get("id") for r in pre.get("recommendations", [])}
+        except Exception:
+            pre_ids = set()
+
+        poll_status = await _poll_recommendation(rag, token)
+        logger.info("event=quality.poll.done token=%s status=%s", token, poll_status)
+
+        recovery_note: str | None = None
+        if poll_status != "completed":
+            # RAG сообщил failed/timeout/errors. Но он мог соврать —
+            # генерация могла всё-таки завершиться. Заглядываем в
+            # /recommendations и ищем НОВУЮ запись.
+            recovery_note = f"poll вернул {poll_status}, ищем рекомендацию вручную"
+            logger.warning("event=quality.poll.recovery_attempt token=%s reason=%s",
+                           token, poll_status)
+
+        try:
+            recs = await _call_with_retry(
+                lambda: rag.get_recommendations(lead_id),
+                what=f"get_recommendations(lead={lead_id})",
+            )
+        except Exception as exc:
+            # Если poll сказал не completed и достать не удалось — финальный fail.
+            if poll_status != "completed":
+                return {**base, "status": "failed",
+                        "error": f"poll={poll_status}; get_recommendations: {_fmt_exc(exc)}"}
+            raise
+
         items = recs.get("recommendations", [])
         if not items:
             return {**base, "status": "failed",
-                    "error": "GET /recommendations вернул пустой список"}
-        raw_data = items[0].get("data")
+                    "error": f"GET /recommendations пуст; poll={poll_status}"}
+
+        # Берём новую запись (которой не было до prepoll). Если все знакомые —
+        # вероятно генерация не довелась, но возьмём первую (RAG обычно
+        # сортирует от свежей к старой).
+        new_items = [r for r in items if r.get("id") not in pre_ids]
+        if not new_items and poll_status != "completed":
+            # Реально нет ничего нового — это уже точный fail
+            return {**base, "status": "failed",
+                    "error": f"poll={poll_status}, новых рекомендаций нет"}
+        chosen = new_items[0] if new_items else items[0]
+        if not new_items:
+            recovery_note = (recovery_note or "") + "; новых записей нет, взяли первую"
+
+        raw_data = chosen.get("data")
         generated = extract_text(raw_data)
         if not generated.strip():
             return {**base, "status": "failed",
-                    "error": "не удалось извлечь текст из data (пустая рекомендация)"}
+                    "error": f"не удалось извлечь текст из data (poll={poll_status})"}
     except Exception as exc:
         logger.warning(
             "event=quality.gen.error lead=%s stage=%s exc_type=%s err=%s",
@@ -525,6 +592,8 @@ async def _evaluate_one_pair(
               settings.quality_embedding_model, generated),
     )
     diag: list[str] = []
+    if recovery_note:
+        diag.append(recovery_note)
     if not ref_emb:
         diag.append("embed(reference) вернул пусто")
     if not gen_emb:
@@ -623,8 +692,12 @@ async def _run_evaluation_task(
     metrics = _aggregate(samples)
 
     if metrics["samples"] == 0:
-        task.status = "failed" if not task.cancelled else "completed"
-        task.error = "ни одного успешного sample (все попытки упали)" if not task.cancelled else None
+        if task.cancelled:
+            task.status = "cancelled"
+            task.error = "остановлено до получения первого успешного sample"
+        else:
+            task.status = "failed"
+            task.error = "ни одного успешного sample (все попытки упали)"
         task.result = {
             "status": "no_samples",
             "metrics": metrics,
@@ -632,13 +705,16 @@ async def _run_evaluation_task(
             "lead_ids": lead_ids,
             "samples": samples,
         }
+        quality_history.save_task(task)
         return
 
     _publish_to_prometheus(metrics, finished)
 
-    task.status = "completed"
+    # Если cancel пришёл, но какие-то samples успели — статус cancelled, но
+    # результат вычисляется по тому, что собрали.
+    task.status = "cancelled" if task.cancelled else "completed"
     task.result = {
-        "status": "ok",
+        "status": "ok" if not task.cancelled else "cancelled",
         "metrics": metrics,
         "odz": ODZ,
         "lead_ids": lead_ids,
@@ -646,6 +722,7 @@ async def _run_evaluation_task(
         "finished_at": task.finished_at,
         "samples": samples,
     }
+    quality_history.save_task(task)
 
 
 async def start_evaluation(
