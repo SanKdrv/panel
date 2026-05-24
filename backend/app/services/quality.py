@@ -24,6 +24,7 @@ import httpx
 
 from ..config import Settings
 from . import gold_dataset as gold_service
+from . import quality_history
 from .metrics import (
     QUALITY_ANSWER_RELEVANCE,
     QUALITY_CONTEXT_PRECISION,
