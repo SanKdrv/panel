@@ -42,7 +42,30 @@ export const leadsApi = {
 }
 
 export const qualityApi = {
-  evaluate: () => api.post('/quality/evaluate').then((r) => r.data),
+  // CRUD gold dataset
+  listGold: () => api.get('/quality/gold').then((r) => r.data),
+  createGold: (stage, reference) =>
+    api.post('/quality/gold', { stage, reference }).then((r) => r.data),
+  updateGold: (id, payload) =>
+    api.put(`/quality/gold/${id}`, payload).then((r) => r.data),
+  deleteGold: (id) => api.delete(`/quality/gold/${id}`).then((r) => r.data),
+
+  // Lead picker
+  findLeads: (minId, maxId, n) =>
+    api
+      .post('/quality/leads/find', { min_id: minId, max_id: maxId, n })
+      .then((r) => r.data),
+
+  // Tasks
+  startTask: (leadIds, stages = null) =>
+    api
+      .post('/quality/tasks', { lead_ids: leadIds, stages })
+      .then((r) => r.data),
+  taskStatus: (taskId) =>
+    api.get(`/quality/tasks/${taskId}`).then((r) => r.data),
+  cancelTask: (taskId) =>
+    api.post(`/quality/tasks/${taskId}/cancel`).then((r) => r.data),
+
   latest: () => api.get('/quality/latest').then((r) => r.data),
   history: (rangeSeconds = 86400, stepSeconds = 300) =>
     api

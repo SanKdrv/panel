@@ -1,34 +1,26 @@
-"""Tests for the quality evaluation pipeline."""
+"""Tests for quality evaluation pipeline (v2)."""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.services import gold_dataset as gold_service
 from app.services import quality as q
 from app.services.metrics import (
-    QUALITY_ANSWER_RELEVANCE,
-    QUALITY_CONTEXT_PRECISION,
     QUALITY_FAITHFULNESS,
     QUALITY_SAMPLES,
-    QUALITY_TPS,
 )
 from app.routers import quality as quality_router
 
 
+# ===== context_precision =====
+
 def test_context_precision_full_overlap():
-    ref = "Котики молоко"
-    gen = "котики и молоко"
-    assert q.context_precision(ref, gen) == 1.0
-
-
-def test_context_precision_partial_overlap():
-    # 2 из 3 эталонных слов встречаются в ответе → 0.6667
-    ref = "Котики любят молоко"
-    gen = "котики и молоко"
-    assert q.context_precision(ref, gen) == pytest.approx(2 / 3, abs=0.01)
+    assert q.context_precision("Котики молоко", "котики и молоко") == 1.0
 
 
 def test_context_precision_partial():
@@ -44,6 +36,8 @@ def test_context_precision_empty_reference():
 def test_context_precision_case_insensitive():
     assert q.context_precision("HELLO", "hello world") == 1.0
 
+
+# ===== cosine =====
 
 def test_cosine_orthogonal():
     assert q._cosine([1, 0], [0, 1]) == 0.0
@@ -66,36 +60,99 @@ def test_tokenize_strips_punctuation():
     assert "hello" in tokens and "world" in tokens and "привет" in tokens
 
 
-def test_load_gold_dataset(tmp_path):
+# ===== gold dataset =====
+
+@pytest.mark.asyncio
+async def test_gold_add_list_update_delete(tmp_path):
     p = tmp_path / "gold.json"
-    p.write_text(json.dumps([{"question": "q1", "reference": "r1"}]), encoding="utf-8")
-    data = q.load_gold_dataset(p)
-    assert data[0]["question"] == "q1"
+    e1 = await gold_service.add_entry(p, "cold", "Hello cold")
+    assert e1["stage"] == "cold"
+    assert e1["reference"] == "Hello cold"
+    assert e1["id"].startswith("cold-")
 
+    e2 = await gold_service.add_entry(p, "warm", "Hello warm")
+    entries = await gold_service.list_entries(p)
+    assert len(entries) == 2
 
-def test_load_gold_dataset_missing(tmp_path):
-    assert q.load_gold_dataset(tmp_path / "missing.json") == []
+    updated = await gold_service.update_entry(
+        p, e1["id"], reference="updated cold",
+    )
+    assert updated["reference"] == "updated cold"
+
+    await gold_service.delete_entry(p, e2["id"])
+    entries = await gold_service.list_entries(p)
+    assert len(entries) == 1
+    assert entries[0]["id"] == e1["id"]
 
 
 @pytest.mark.asyncio
-async def test_evaluate_no_dataset(tmp_path, settings, fake_rag):
-    # Point at an empty file
-    settings_copy = type(settings).model_construct(**settings.model_dump())
-    settings_copy.quality_gold_dataset_path = str(tmp_path / "absent.json")
-    result = await q.evaluate(fake_rag, settings_copy)
-    assert result["status"] == "no_dataset"
-    assert result["metrics"] is None
+async def test_gold_invalid_stage(tmp_path):
+    p = tmp_path / "gold.json"
+    with pytest.raises(ValueError):
+        await gold_service.add_entry(p, "bogus", "x")
 
 
 @pytest.mark.asyncio
-async def test_evaluate_full_run(tmp_path, settings, fake_rag):
+async def test_gold_empty_reference(tmp_path):
+    p = tmp_path / "gold.json"
+    with pytest.raises(ValueError):
+        await gold_service.add_entry(p, "cold", "   ")
+
+
+@pytest.mark.asyncio
+async def test_gold_delete_missing(tmp_path):
+    p = tmp_path / "gold.json"
+    with pytest.raises(KeyError):
+        await gold_service.delete_entry(p, "nope")
+
+
+def test_gold_load_corrupt(tmp_path):
+    p = tmp_path / "gold.json"
+    p.write_text('[{"stage":"foo","reference":"x"}]', encoding="utf-8")
+    # entries with invalid stage are filtered out
+    assert gold_service.load(p) == []
+
+
+# ===== find_valid_leads =====
+
+@pytest.mark.asyncio
+async def test_find_valid_leads_picks_valid(fake_rag):
+    async def actions(lead_id):
+        if lead_id in ("5", "7"):
+            return {"lead_id": lead_id, "actions": [{"id": "a"}]}
+        return {"lead_id": lead_id, "actions": []}
+
+    fake_rag.get_lead_actions = AsyncMock(side_effect=actions)
+    result = await q.find_valid_leads(fake_rag, 1, 10, n=2, max_attempts=10)
+    assert len(result["found"]) == 2
+    ids = {x["lead_id"] for x in result["found"]}
+    assert ids.issubset({"5", "7"})
+    assert result["not_enough"] is False
+
+
+@pytest.mark.asyncio
+async def test_find_valid_leads_not_enough(fake_rag):
+    fake_rag.get_lead_actions = AsyncMock(
+        return_value={"lead_id": "x", "actions": []}
+    )
+    result = await q.find_valid_leads(fake_rag, 1, 3, n=5, max_attempts=10)
+    assert result["found"] == []
+    assert result["not_enough"] is True
+
+
+@pytest.mark.asyncio
+async def test_find_valid_leads_invalid_range(fake_rag):
+    result = await q.find_valid_leads(fake_rag, 10, 5, n=3)
+    assert result["found"] == []
+    assert result["not_enough"] is True
+
+
+# ===== async task evaluation =====
+
+@pytest.mark.asyncio
+async def test_start_evaluation_completes(tmp_path, settings, fake_rag):
     gold = [
-        {
-            "question": "Что такое RAG?",
-            "reference": "RAG это retrieval-augmented generation",
-            "lead_id": "test-1",
-            "type": "cold",
-        },
+        {"id": "cold-1", "stage": "cold", "reference": "hello world"},
     ]
     p = tmp_path / "gold.json"
     p.write_text(json.dumps(gold), encoding="utf-8")
@@ -103,44 +160,52 @@ async def test_evaluate_full_run(tmp_path, settings, fake_rag):
     settings_copy = type(settings).model_construct(**settings.model_dump())
     settings_copy.quality_gold_dataset_path = str(p)
 
-    # Mock generation: token + completed + recommendation text
-    fake_rag.generate_recommendation = AsyncMock(return_value={"token": "tok", "status": "queued"})
-    fake_rag.recommendation_status = AsyncMock(return_value={"status": "completed"})
+    fake_rag.generate_recommendation = AsyncMock(
+        return_value={"token": "tok", "status": "queued"}
+    )
     fake_rag.get_recommendations = AsyncMock(return_value={
-        "lead_id": "test-1",
-        "recommendations": [{"id": "r1", "type": "cold", "data": "RAG это retrieval-augmented generation"}],
+        "lead_id": "1",
+        "recommendations": [{"id": "r", "type": "cold", "data": "hello world"}],
     })
 
-    async def fake_judge(*args, **kwargs):
-        return 0.9
-
-    async def fake_embed(*args, **kwargs):
-        return [1.0, 0.0, 0.0]
-
-    with patch.object(q, "call_judge", side_effect=fake_judge), \
-         patch.object(q, "embed", side_effect=fake_embed), \
+    with patch.object(q, "call_judge", AsyncMock(return_value=0.9)), \
+         patch.object(q, "embed", AsyncMock(return_value=[1.0, 0.0, 0.0])), \
          patch.object(q, "_poll_recommendation", AsyncMock(return_value=True)):
-        result = await q.evaluate(fake_rag, settings_copy)
+        quality_router._reset_for_tests()
+        task_id = await q.start_evaluation(
+            fake_rag, settings_copy, lead_ids=["1", "2"],
+        )
+        for _ in range(50):
+            task = q.get_task(task_id)
+            if task and task.status in ("completed", "failed"):
+                break
+            await asyncio.sleep(0.05)
 
-    assert result["status"] == "ok"
-    m = result["metrics"]
-    assert m["faithfulness"] == 0.9
-    # cosine of identical vectors = 1.0
-    assert m["answer_relevance"] == pytest.approx(1.0)
-    # context precision full overlap
-    assert m["context_precision"] > 0.5
-    assert m["tps"] > 0
-    assert m["samples"] == 1
-
-    # Prometheus gauges should be set
+    task = q.get_task(task_id)
+    assert task is not None
+    assert task.status == "completed"
+    assert task.total == 2  # 2 leads × 1 entry
+    assert task.done == 2
+    assert task.result["metrics"]["samples"] == 2
+    assert task.result["metrics"]["faithfulness"] == 0.9
     assert QUALITY_FAITHFULNESS._value.get() == 0.9
-    assert QUALITY_SAMPLES._value.get() == 1
+    assert QUALITY_SAMPLES._value.get() == 2
 
+
+@pytest.mark.asyncio
+async def test_start_evaluation_empty_leads(settings, fake_rag):
+    with pytest.raises(ValueError):
+        await q.start_evaluation(fake_rag, settings, lead_ids=[])
+
+
+# ===== HTTP routes =====
 
 def test_quality_routes_require_auth(client):
     quality_router._reset_for_tests()
-    assert client.post("/api/quality/evaluate").status_code == 401
+    assert client.post("/api/quality/tasks", json={"lead_ids": []}).status_code == 401
+    assert client.get("/api/quality/tasks").status_code == 401
     assert client.get("/api/quality/latest").status_code == 401
+    assert client.get("/api/quality/gold").status_code == 401
 
 
 def test_quality_latest_no_run(client, auth_headers):
@@ -149,29 +214,117 @@ def test_quality_latest_no_run(client, auth_headers):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "no_run"
-    assert body["metrics"] is None
-    assert "faithfulness" in body["odz"]
 
 
-def test_quality_evaluate_endpoint(client, auth_headers, fake_rag, tmp_path):
-    """Trigger /evaluate via TestClient with mocked judge/embed."""
-    quality_router._reset_for_tests()
-    gold_path = Path(__file__).parent.parent / "app" / "data" / "gold_dataset.json"
-    assert gold_path.exists()
+def test_gold_crud_endpoints(client, auth_headers, tmp_path, monkeypatch):
+    # Use isolated gold dataset for this test
+    from app.config import get_settings
+    s = get_settings()
+    orig = s.quality_gold_dataset_path
+    p = tmp_path / "gold.json"
+    s.quality_gold_dataset_path = str(p)
+    try:
+        # list (empty)
+        r = client.get("/api/quality/gold", headers=auth_headers)
+        assert r.status_code == 200
+        assert r.json()["entries"] == []
 
-    async def fake_judge(*a, **kw):
-        return 0.85
+        # create
+        r = client.post(
+            "/api/quality/gold",
+            headers=auth_headers,
+            json={"stage": "cold", "reference": "hello"},
+        )
+        assert r.status_code == 200
+        entry_id = r.json()["id"]
 
-    async def fake_embed(*a, **kw):
-        return [0.5, 0.5, 0.5]
+        # list (1)
+        r = client.get("/api/quality/gold", headers=auth_headers)
+        assert len(r.json()["entries"]) == 1
 
-    with patch.object(q, "call_judge", side_effect=fake_judge), \
-         patch.object(q, "embed", side_effect=fake_embed), \
-         patch.object(q, "_poll_recommendation", AsyncMock(return_value=True)):
-        r = client.post("/api/quality/evaluate", headers=auth_headers)
+        # update
+        r = client.put(
+            f"/api/quality/gold/{entry_id}",
+            headers=auth_headers,
+            json={"reference": "updated"},
+        )
+        assert r.status_code == 200
+        assert r.json()["reference"] == "updated"
 
+        # delete
+        r = client.delete(f"/api/quality/gold/{entry_id}", headers=auth_headers)
+        assert r.status_code == 200
+
+        # 404 on missing
+        r = client.put(
+            "/api/quality/gold/missing",
+            headers=auth_headers,
+            json={"reference": "x"},
+        )
+        assert r.status_code == 404
+    finally:
+        s.quality_gold_dataset_path = orig
+
+
+def test_gold_invalid_stage_rejected(client, auth_headers, tmp_path):
+    from app.config import get_settings
+    s = get_settings()
+    orig = s.quality_gold_dataset_path
+    s.quality_gold_dataset_path = str(tmp_path / "gold.json")
+    try:
+        r = client.post(
+            "/api/quality/gold",
+            headers=auth_headers,
+            json={"stage": "bogus", "reference": "x"},
+        )
+        assert r.status_code == 400
+    finally:
+        s.quality_gold_dataset_path = orig
+
+
+def test_find_leads_endpoint(client, auth_headers, fake_rag):
+    fake_rag.get_lead_actions = AsyncMock(return_value={
+        "lead_id": "1",
+        "actions": [{"id": "a"}],
+    })
+    r = client.post(
+        "/api/quality/leads/find",
+        headers=auth_headers,
+        json={"min_id": 1, "max_id": 5, "n": 2},
+    )
     assert r.status_code == 200
-    assert r.json()["status"] in ("ok", "no_samples")
+    body = r.json()
+    assert len(body["found"]) >= 1
 
-    r2 = client.get("/api/quality/latest", headers=auth_headers)
-    assert r2.status_code == 200
+
+def test_find_leads_invalid_range(client, auth_headers):
+    r = client.post(
+        "/api/quality/leads/find",
+        headers=auth_headers,
+        json={"min_id": 10, "max_id": 5, "n": 2},
+    )
+    assert r.status_code == 400
+
+
+def test_start_eval_empty_leads(client, auth_headers):
+    r = client.post(
+        "/api/quality/tasks",
+        headers=auth_headers,
+        json={"lead_ids": []},
+    )
+    assert r.status_code == 400
+
+
+def test_task_status_404(client, auth_headers):
+    r = client.get("/api/quality/tasks/nonexistent", headers=auth_headers)
+    assert r.status_code == 404
+
+
+def test_gold_dataset_file_exists():
+    """Sanity: production gold dataset is valid."""
+    p = Path(__file__).parent.parent / "app" / "data" / "gold_dataset.json"
+    assert p.exists()
+    entries = gold_service.load(p)
+    assert len(entries) >= 4
+    stages = {e["stage"] for e in entries}
+    assert stages == {"cold", "warm", "hot", "after_sale"}
