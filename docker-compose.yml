@@ -48,11 +48,12 @@ services:
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/rag-operations.json
       # Grafana работает под /grafana/ — nginx фронта проксирует туда.
-      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      # PANEL_PUBLIC_URL задаётся в .env (например http://192.168.100.38:5173).
+      GF_SERVER_ROOT_URL: "${PANEL_PUBLIC_URL:-http://localhost:5173}/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     # Порт наружу не публикуется: Grafana доступна только через nginx
     # фронта по пути /grafana/. Если нужен прямой доступ для отладки —
-    # раскомментируй блок ports ниже.
+    # раскомментировать блок ports ниже.
     # ports:
     #   - "${GRAFANA_PORT:-3000}:3000"
     expose:
