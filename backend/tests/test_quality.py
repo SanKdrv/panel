@@ -79,7 +79,8 @@ def test_extract_text_picks_recommendation():
     }
     out = q.extract_text(data)
     assert "Главный текст рекомендации" in out
-    assert "Test title" in out
+    # title — метаинформация о контенте, в сравнение не идёт
+    assert "Test title" not in out
     # reason — служебное объяснение, в сравнение не идёт
     assert "Потому что" not in out
     assert "task_id" not in out
@@ -105,6 +106,32 @@ def test_extract_text_list():
 
 def test_extract_text_picks_text_field_when_no_recommendation():
     assert "только text" in q.extract_text({"text": "только text"})
+
+
+# ===== _count_generated_tokens =====
+
+def test_count_tokens_dict_includes_all_user_fields():
+    data = {
+        "title": "Один два",          # 2 tokens
+        "recommendation": "три четыре пять",  # 3 tokens
+        "reason": "шесть",            # 1 token
+        "_system": {"task_id": "ignored", "lead_id": "ignored"},
+    }
+    # Считаем все кроме _system
+    assert q._count_generated_tokens(data) == 6
+
+
+def test_count_tokens_string():
+    assert q._count_generated_tokens("hello world test") == 3
+
+
+def test_count_tokens_none():
+    assert q._count_generated_tokens(None) == 0
+
+
+def test_count_tokens_excludes_service_fields():
+    data = {"recommendation": "x y z", "_system": {"a": "long text here"}}
+    assert q._count_generated_tokens(data) == 3
 
 
 # ===== gold dataset =====

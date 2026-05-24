@@ -74,6 +74,33 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return max(0.0, min(1.0, dot / (na * nb)))
 
 
+# Поля, которые не считаем за «сгенерированный моделью контент» (служебные).
+_NON_GENERATED_FIELDS = {"_system", "system", "task_id", "lead_id", "type", "id"}
+
+
+def _count_generated_tokens(data) -> int:
+    """Считает токены всего, что реально сгенерировала модель — все
+    непустые текстовые поля raw_data кроме служебных (_system и т.п.).
+    Используется для TPS, чтобы не занижать скорость генератора."""
+    if data is None:
+        return 0
+    if isinstance(data, str):
+        return len(_tokenize(data))
+    if isinstance(data, list):
+        return sum(_count_generated_tokens(x) for x in data)
+    if isinstance(data, dict):
+        total = 0
+        for k, v in data.items():
+            if k in _NON_GENERATED_FIELDS:
+                continue
+            if isinstance(v, str):
+                total += len(_tokenize(v))
+            elif isinstance(v, (dict, list)):
+                total += _count_generated_tokens(v)
+        return max(total, 1)
+    return len(_tokenize(str(data)))
+
+
 def context_precision(reference: str, generated: str) -> float:
     ref_tokens = set(_tokenize(reference))
     gen_tokens = set(_tokenize(generated))
@@ -147,14 +174,16 @@ def load_gold_dataset(path) -> list[dict]:
 
 # Поля, в которых может лежать текст рекомендации внутри data dict.
 _TEXT_FIELDS_ORDERED = ("recommendation", "text", "answer", "message", "content")
-# Поля, чьё значение тоже стоит включить (короткий контекст для пользователя).
-# `reason` — служебное объяснение модели «почему выбрала такую рекомендацию»,
-# в пользовательский текст не идёт, поэтому в сравнение его не включаем.
-_CONTEXT_FIELDS = ("title",)
-# Поля, которые игнорируем (служебные, не показываются пользователю).
+# Поля контекста, которые добавляются к основному тексту перед сравнением.
+# Сейчас пусто: title — это название статьи/контента, на который ссылается
+# RAG (метаинформация), recommendation уже упоминает его внутри текста.
+# Эталоны таких заголовков не содержат, поэтому включение title только
+# зашумляло Context Precision.
+_CONTEXT_FIELDS: tuple[str, ...] = ()
+# Поля, которые игнорируем (служебные / не пользовательский текст).
 _SKIP_FIELDS = {
     "_system", "system", "task_id", "lead_id", "type", "id",
-    "reason", "explanation", "rationale",
+    "title", "reason", "explanation", "rationale",
 }
 
 
@@ -472,8 +501,14 @@ async def _evaluate_one_pair(
                 "error": f"исключение при генерации: {_fmt_exc(exc)}"}
 
     duration = max(time.monotonic() - t0, 0.001)
+    # TPS считаем по ВСЕМ сгенерированным моделью данным (включая title,
+    # reason и прочие поля кроме служебного _system), а не только по
+    # пользовательскому тексту — это честная метрика производительности
+    # генератора. Для сравнения с эталоном используется `generated`,
+    # для TPS — все непустые текстовые поля raw_data.
+    tokens_for_tps = _count_generated_tokens(raw_data)
     tokens = max(len(_tokenize(generated)), 1)
-    tps = tokens / duration
+    tps = tokens_for_tps / duration
 
     # Faithfulness
     faith = await call_judge(
@@ -508,7 +543,8 @@ async def _evaluate_one_pair(
         "answer_relevance": relevance,
         "context_precision": precision,
         "tps": round(tps, 3),
-        "tokens": tokens,
+        "tokens": tokens,                       # токенов в пользовательском тексте
+        "tokens_for_tps": tokens_for_tps,       # всего сгенерировано моделью
         "duration_s": round(duration, 2),
     }
     if diag:

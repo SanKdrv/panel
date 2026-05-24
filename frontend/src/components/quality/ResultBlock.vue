@@ -131,7 +131,18 @@
                     </div>
                     <div class="col-md-6">
                       <div class="small fw-semibold text-muted mb-1">
-                        Сгенерировано ({{ s.tokens }} токенов за {{ s.duration_s }}с)
+                        Сгенерировано
+                        <span class="fw-normal">
+                          (всего
+                          <span :title="'все поля кроме _system — используется для TPS'">
+                            {{ s.tokens_for_tps ?? s.tokens }}
+                          </span>
+                          токенов,
+                          <span :title="'только пользовательский текст — используется для метрик качества'">
+                            {{ s.tokens }} полезных
+                          </span>
+                          за {{ s.duration_s }}с)
+                        </span>
                       </div>
                       <div class="small" style="white-space: pre-wrap">
                         {{ s.generated }}
