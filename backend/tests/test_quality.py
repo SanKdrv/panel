@@ -131,6 +131,24 @@ async def test_find_valid_leads_picks_valid(fake_rag):
 
 
 @pytest.mark.asyncio
+async def test_find_valid_leads_min_actions(fake_rag):
+    """min_actions=3 пропускает лидов с меньшим числом actions."""
+    def actions_for(lead_id):
+        # лиды 1-3: по 1 action; 4-6: по 5 actions
+        count = 5 if int(lead_id) >= 4 else 1
+        return {"lead_id": lead_id, "actions": [{"id": str(i)} for i in range(count)]}
+
+    fake_rag.get_lead_actions = AsyncMock(side_effect=lambda lid: actions_for(lid))
+    result = await q.find_valid_leads(
+        fake_rag, 1, 6, n=2, min_actions=3, max_attempts=20,
+    )
+    assert len(result["found"]) == 2
+    for f in result["found"]:
+        assert int(f["lead_id"]) >= 4
+        assert f["actions_count"] == 5
+
+
+@pytest.mark.asyncio
 async def test_find_valid_leads_not_enough(fake_rag):
     fake_rag.get_lead_actions = AsyncMock(
         return_value={"lead_id": "x", "actions": []}

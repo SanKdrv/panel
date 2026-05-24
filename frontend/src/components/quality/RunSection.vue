@@ -16,10 +16,19 @@
           <label class="form-label small text-muted">Сколько лидов</label>
           <input v-model.number="form.n" type="number" class="form-control" />
         </div>
+        <div class="col-md-3">
+          <label class="form-label small text-muted">
+            Min actions
+            <i class="bi bi-info-circle" title="Минимальное число цифровых следов для отбора лида"></i>
+          </label>
+          <input v-model.number="form.minActions" type="number" min="1" class="form-control" />
+        </div>
       </div>
       <p class="small text-muted mb-3">
-        Выберем случайные лид-id из диапазона, проверим что у них есть actions
-        в RAG-системе, и предложим выбрать кого включить в прогон.
+        Выберем случайные лид-id из диапазона, проверим что у них есть как
+        минимум <strong>{{ form.minActions }}</strong>
+        action{{ form.minActions === 1 ? '' : 's' }} в RAG-системе, и
+        предложим выбрать кого включить в прогон.
       </p>
       <button class="btn btn-primary" :disabled="finding" @click="findLeads">
         <i class="bi bi-search me-2"></i>
@@ -61,7 +70,7 @@
             v-model="selectedSet[l.lead_id]"
             class="form-check-input me-3"
           />
-          <span class="fw-semibold me-3">lead_{{ l.lead_id }}</span>
+          <span class="fw-semibold me-3">#{{ l.lead_id }}</span>
           <span class="text-muted small">{{ l.actions_count }} actions</span>
         </li>
       </ul>
@@ -126,7 +135,9 @@ import { qualityApi } from '../../api/endpoints'
 import ResultBlock from './ResultBlock.vue'
 
 const step = ref('form') // form | pick | run
-const form = ref({ min: 1, max: 200, n: 5 })
+const form = ref({ min: 1, max: 200, n: 5, minActions: 1 })
+
+const ACTIVE_TASK_KEY = 'quality_active_task_id'
 
 const finding = ref(false)
 const error = ref('')
@@ -161,7 +172,12 @@ async function findLeads() {
   error.value = ''
   finding.value = true
   try {
-    const data = await qualityApi.findLeads(form.value.min, form.value.max, form.value.n)
+    const data = await qualityApi.findLeads(
+      form.value.min,
+      form.value.max,
+      form.value.n,
+      form.value.minActions,
+    )
     foundLeads.value = data.found || []
     selectedSet.value = {}
     foundLeads.value.forEach((l) => (selectedSet.value[l.lead_id] = true))
@@ -194,6 +210,7 @@ async function startEvaluation() {
   error.value = ''
   try {
     const data = await qualityApi.startTask(selectedLeads.value)
+    localStorage.setItem(ACTIVE_TASK_KEY, data.task_id)
     step.value = 'run'
     task.value = { id: data.task_id, status: 'queued', done: 0, total: 0 }
     startPolling()
@@ -212,9 +229,16 @@ function startPolling() {
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(pollTimer)
         pollTimer = null
+        localStorage.removeItem(ACTIVE_TASK_KEY)
       }
     } catch (e) {
-      /* keep polling */
+      // Если 404 — задача потеряна (рестарт бэка), сбросим.
+      if (e?.response?.status === 404) {
+        clearInterval(pollTimer)
+        pollTimer = null
+        localStorage.removeItem(ACTIVE_TASK_KEY)
+        error.value = 'Задача не найдена на сервере (возможно, был рестарт)'
+      }
     }
   }, 2000)
 }
@@ -231,6 +255,7 @@ async function cancelTask() {
 function restart() {
   task.value = null
   step.value = 'form'
+  localStorage.removeItem(ACTIVE_TASK_KEY)
 }
 
 onUnmounted(() => {
@@ -238,6 +263,35 @@ onUnmounted(() => {
 })
 
 onMounted(async () => {
-  // Если есть незакрытый прогон — подхватим (опционально, после рефреша страницы)
+  // 1) Есть активный task_id в localStorage → подхватим
+  const savedId = localStorage.getItem(ACTIVE_TASK_KEY)
+  if (savedId) {
+    try {
+      const data = await qualityApi.taskStatus(savedId)
+      task.value = data
+      step.value = 'run'
+      if (data.status === 'running' || data.status === 'queued') {
+        startPolling()
+      } else {
+        // Уже завершилась — оставим как есть, но уберём ключ
+        localStorage.removeItem(ACTIVE_TASK_KEY)
+      }
+      return
+    } catch (e) {
+      // 404: задача потеряна → почистим
+      localStorage.removeItem(ACTIVE_TASK_KEY)
+    }
+  }
+
+  // 2) Иначе — попробуем подгрузить последний завершённый результат
+  try {
+    const latest = await qualityApi.latest()
+    if (latest?.status === 'completed' && latest.result) {
+      task.value = latest
+      step.value = 'run'
+    }
+  } catch (e) {
+    /* ничего, остаёмся на форме */
+  }
 })
 </script>

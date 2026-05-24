@@ -49,28 +49,37 @@
 
     <!-- ===== HISTORY TAB ===== -->
     <div v-show="tab === 'history'">
-      <div class="card border-0 shadow-sm p-4">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-          <div class="fw-semibold">Тренд метрик качества</div>
-          <select
-            v-model.number="historyRange"
-            class="form-select form-select-sm"
-            style="width: 140px"
-          >
-            <option :value="3600">1 час</option>
-            <option :value="21600">6 часов</option>
-            <option :value="86400">24 часа</option>
-            <option :value="604800">7 дней</option>
-          </select>
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <div class="fw-semibold">Тренд метрик качества</div>
+        <select
+          v-model.number="historyRange"
+          class="form-select form-select-sm"
+          style="width: 140px"
+        >
+          <option :value="3600">1 час</option>
+          <option :value="21600">6 часов</option>
+          <option :value="86400">24 часа</option>
+          <option :value="604800">7 дней</option>
+        </select>
+      </div>
+
+      <div class="card border-0 shadow-sm p-4 mb-3">
+        <div class="small text-muted mb-2">
+          Faithfulness · Answer Relevance · Context Precision (0…1)
         </div>
-        <LineChart :series="historySeries" />
+        <LineChart :series="qualitySeries" :y-max="1" :y-min="0" />
+      </div>
+
+      <div class="card border-0 shadow-sm p-4">
+        <div class="small text-muted mb-2">TPS, токенов/с</div>
+        <LineChart :series="tpsSeries" unit=" т/с" :y-min="0" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { qualityApi } from '../api/endpoints'
 import LineChart from '../components/LineChart.vue'
 import RunSection from '../components/quality/RunSection.vue'
@@ -78,7 +87,7 @@ import GoldSection from '../components/quality/GoldSection.vue'
 
 const tab = ref('run')
 const historyRange = ref(86400)
-const historySeries = ref([])
+const historyData = ref({}) // map metric_name -> points[]
 
 const METRIC_LABELS = {
   rag_faithfulness: 'Faithfulness',
@@ -87,14 +96,28 @@ const METRIC_LABELS = {
   rag_tps: 'TPS',
 }
 
+const QUALITY_KEYS = [
+  'rag_faithfulness',
+  'rag_answer_relevance',
+  'rag_context_precision',
+]
+
+const qualitySeries = computed(() =>
+  QUALITY_KEYS.map((k) => ({
+    label: METRIC_LABELS[k],
+    points: historyData.value[k] || [],
+  })),
+)
+
+const tpsSeries = computed(() => [
+  { label: 'TPS', points: historyData.value.rag_tps || [] },
+])
+
 async function loadHistory() {
   try {
     const step = Math.max(60, Math.floor(historyRange.value / 200))
     const data = await qualityApi.history(historyRange.value, step)
-    historySeries.value = Object.entries(data.metrics).map(([name, points]) => ({
-      label: METRIC_LABELS[name] || name,
-      points,
-    }))
+    historyData.value = data.metrics || {}
   } catch (e) {
     /* ignore */
   }

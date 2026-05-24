@@ -183,19 +183,25 @@ async def find_valid_leads(
     min_id: int,
     max_id: int,
     n: int,
+    min_actions: int = 1,
     max_attempts: int | None = None,
 ) -> dict:
     """Случайно выбирает lead_id из [min, max], проверяет через
     /recommendations/actions/{id}. Считает лид валидным, если ответ 2xx
-    и actions непустой. Возвращает первые n валидных + cтатистику."""
+    и в actions >= min_actions записей. Возвращает первые n валидных
+    + статистику."""
     import random
-    if min_id > max_id or n <= 0:
-        return {"found": [], "attempts": 0, "requested": n, "not_enough": True}
+    if min_id > max_id or n <= 0 or min_actions < 1:
+        return {
+            "found": [], "attempts": 0, "requested": n,
+            "min_actions": min_actions, "not_enough": True,
+        }
 
     pool = list(range(min_id, max_id + 1))
     random.shuffle(pool)
     if max_attempts is None:
-        max_attempts = min(len(pool), max(n * 5, 25))
+        # Чем выше min_actions, тем больше попыток допускаем.
+        max_attempts = min(len(pool), max(n * 5 * min_actions, 25))
 
     found: list[dict] = []
     attempts = 0
@@ -207,7 +213,7 @@ async def find_valid_leads(
         try:
             data = await rag.get_lead_actions(str(lead_id))
             actions = data.get("actions") or []
-            if actions:
+            if len(actions) >= min_actions:
                 found.append({
                     "lead_id": str(lead_id),
                     "actions_count": len(actions),
@@ -220,6 +226,7 @@ async def find_valid_leads(
         "found": found,
         "attempts": attempts,
         "requested": n,
+        "min_actions": min_actions,
         "not_enough": len(found) < n,
     }
 

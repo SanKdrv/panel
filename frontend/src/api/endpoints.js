@@ -51,9 +51,14 @@ export const qualityApi = {
   deleteGold: (id) => api.delete(`/quality/gold/${id}`).then((r) => r.data),
 
   // Lead picker
-  findLeads: (minId, maxId, n) =>
+  findLeads: (minId, maxId, n, minActions = 1) =>
     api
-      .post('/quality/leads/find', { min_id: minId, max_id: maxId, n })
+      .post('/quality/leads/find', {
+        min_id: minId,
+        max_id: maxId,
+        n,
+        min_actions: minActions,
+      })
       .then((r) => r.data),
 
   // Tasks

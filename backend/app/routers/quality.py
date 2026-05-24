@@ -37,6 +37,7 @@ class FindLeadsRequest(BaseModel):
     min_id: int = Field(1, ge=1)
     max_id: int = Field(200, ge=1)
     n: int = Field(5, ge=1, le=50)
+    min_actions: int = Field(1, ge=1, le=1000)
 
 
 class StartEvalRequest(BaseModel):
@@ -108,7 +109,7 @@ async def find_leads(
     if body.min_id > body.max_id:
         raise HTTPException(status_code=400, detail="min_id must be <= max_id")
     return await quality_service.find_valid_leads(
-        rag, body.min_id, body.max_id, body.n,
+        rag, body.min_id, body.max_id, body.n, min_actions=body.min_actions,
     )
 
 

@@ -67,7 +67,7 @@
           <tbody>
             <template v-for="(s, i) in samples" :key="i">
               <tr style="cursor: pointer" @click="toggle(i)">
-                <td>lead_{{ s.lead_id }}</td>
+                <td>#{{ s.lead_id }}</td>
                 <td>
                   <span class="badge rounded-pill px-2" :class="badge(s.stage)">
                     {{ s.stage }}
