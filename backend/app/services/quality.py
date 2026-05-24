@@ -127,6 +127,74 @@ def load_gold_dataset(path) -> list[dict]:
     return gold_service.load(path)
 
 
+# Поля, в которых может лежать текст рекомендации внутри data dict.
+_TEXT_FIELDS_ORDERED = ("recommendation", "text", "answer", "message", "content")
+# Поля, чьё значение тоже стоит включить (короткий контекст).
+_CONTEXT_FIELDS = ("title", "reason")
+# Поля, которые игнорируем (служебные).
+_SKIP_FIELDS = {"_system", "system", "task_id", "lead_id", "type", "id"}
+
+
+def extract_text(data) -> str:
+    """Извлекает осмысленный текст из data, который вернула RAG API.
+
+    RAG возвращает рекомендацию как dict с разными полями. Раньше мы
+    делали str(data), и в текст шла Python-репрезентация словаря со
+    служебными ключами — это убивало метрики качества.
+
+    Стратегия:
+    - str/None → возвращаем как есть
+    - dict → берём первое непустое из _TEXT_FIELDS_ORDERED как основу,
+      опционально префиксуем title/reason. Если ни одного известного
+      текстового поля нет — конкатим все строковые значения, кроме
+      служебных полей.
+    - list → объединяем элементы через перевод строки
+    """
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return "\n".join(extract_text(x) for x in data if x is not None).strip()
+    if isinstance(data, dict):
+        # 1) Главный текстовый ключ
+        main_text = ""
+        for k in _TEXT_FIELDS_ORDERED:
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                main_text = v.strip()
+                break
+            if isinstance(v, (dict, list)):
+                inner = extract_text(v)
+                if inner:
+                    main_text = inner
+                    break
+
+        if main_text:
+            parts: list[str] = []
+            for k in _CONTEXT_FIELDS:
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    parts.append(v.strip())
+            parts.append(main_text)
+            return "\n".join(parts)
+
+        # 2) Fallback: соберём все string-значения, кроме служебных
+        chunks: list[str] = []
+        for k, v in data.items():
+            if k in _SKIP_FIELDS:
+                continue
+            if isinstance(v, str) and v.strip():
+                chunks.append(v.strip())
+            elif isinstance(v, (dict, list)):
+                inner = extract_text(v)
+                if inner:
+                    chunks.append(inner)
+        return "\n".join(chunks)
+    # 3) Числа и прочее — просто str()
+    return str(data)
+
+
 async def _poll_recommendation(
     rag: RAGClient, token: str, timeout_s: float = 600.0, poll_interval: float = 5.0,
 ) -> bool:
@@ -139,6 +207,58 @@ async def _poll_recommendation(
         if data.get("status") == "failed":
             return False
     return False
+
+
+# ---------- services diagnostic ----------
+
+async def _diagnose_services(
+    client: httpx.AsyncClient, settings: Settings,
+) -> None:
+    """Однократный пинг judge и embedder в начале прогона.
+    Только логирование — не падаем, даже если оба недоступны."""
+    # Embedder
+    try:
+        r = await client.post(
+            f"{settings.quality_embedding_url.rstrip('/')}/api/embeddings",
+            json={"model": settings.quality_embedding_model, "prompt": "ping"},
+            timeout=15.0,
+        )
+        r.raise_for_status()
+        emb = r.json().get("embedding", [])
+        logger.info(
+            "event=quality.diag.embedder url=%s model=%s ok=%s dim=%s",
+            settings.quality_embedding_url, settings.quality_embedding_model,
+            bool(emb), len(emb),
+        )
+    except Exception as exc:
+        logger.warning(
+            "event=quality.diag.embedder.error url=%s model=%s err=%s",
+            settings.quality_embedding_url, settings.quality_embedding_model, exc,
+        )
+
+    # Judge
+    try:
+        r = await client.post(
+            f"{settings.quality_judge_url.rstrip('/')}/api/generate",
+            json={
+                "model": settings.quality_judge_model,
+                "prompt": "Respond with the single number 0.5",
+                "stream": False,
+            },
+            timeout=30.0,
+        )
+        r.raise_for_status()
+        text = r.json().get("response", "").strip()
+        logger.info(
+            "event=quality.diag.judge url=%s model=%s ok=%s preview=%r",
+            settings.quality_judge_url, settings.quality_judge_model,
+            bool(text), text[:60],
+        )
+    except Exception as exc:
+        logger.warning(
+            "event=quality.diag.judge.error url=%s model=%s err=%s",
+            settings.quality_judge_url, settings.quality_judge_model, exc,
+        )
 
 
 # ---------- task registry ----------
@@ -239,51 +359,76 @@ async def _evaluate_one_pair(
     settings: Settings,
     lead_id: str,
     entry: dict,
-) -> dict | None:
-    """Один прогон (один лид × одна gold-запись). Возвращает sample dict
-    или None если генерация не удалась."""
+) -> dict:
+    """Один прогон (один лид × одна gold-запись). Всегда возвращает sample dict.
+    Если генерация не удалась — sample имеет status='failed' и причину в error.
+    Иначе status='ok' и все метрики посчитаны."""
     stage = entry["stage"]
     reference = entry["reference"]
+    base = {
+        "lead_id": lead_id,
+        "entry_id": entry["id"],
+        "stage": stage,
+        "reference": reference,
+    }
 
     t0 = time.monotonic()
     try:
         gen = await rag.generate_recommendation(lead_id, stage)
         token = gen.get("token", "")
+        if not token:
+            return {**base, "status": "failed",
+                    "error": "RAG не вернул token при /generate"}
         ok = await _poll_recommendation(rag, token)
         if not ok:
-            return None
+            return {**base, "status": "failed",
+                    "error": "RAG-генерация завершилась со status=failed или истёк timeout"}
         recs = await rag.get_recommendations(lead_id)
         items = recs.get("recommendations", [])
         if not items:
-            return None
-        generated = str(items[0].get("data", ""))
+            return {**base, "status": "failed",
+                    "error": "GET /recommendations вернул пустой список"}
+        raw_data = items[0].get("data")
+        generated = extract_text(raw_data)
+        if not generated.strip():
+            return {**base, "status": "failed",
+                    "error": "не удалось извлечь текст из data (пустая рекомендация)"}
     except Exception as exc:
         logger.warning("event=quality.gen.error lead=%s err=%s", lead_id, exc)
-        return None
+        return {**base, "status": "failed", "error": f"исключение при генерации: {exc}"}
 
     duration = max(time.monotonic() - t0, 0.001)
     tokens = max(len(_tokenize(generated)), 1)
     tps = tokens / duration
 
+    # Faithfulness
     faith = await call_judge(
         judge_client,
         settings.quality_judge_url, settings.quality_judge_model,
         stage, reference, generated,
     )
+
+    # Answer Relevance — c диагностикой пустых эмбеддингов
     ref_emb, gen_emb = await asyncio.gather(
         embed(judge_client, settings.quality_embedding_url,
               settings.quality_embedding_model, reference),
         embed(judge_client, settings.quality_embedding_url,
               settings.quality_embedding_model, generated),
     )
+    diag: list[str] = []
+    if not ref_emb:
+        diag.append("embed(reference) вернул пусто")
+    if not gen_emb:
+        diag.append("embed(generated) вернул пусто")
+    if ref_emb and gen_emb and len(ref_emb) != len(gen_emb):
+        diag.append(f"размерности эмбеддингов не совпадают: {len(ref_emb)} vs {len(gen_emb)}")
     relevance = _cosine(ref_emb, gen_emb)
+
     precision = context_precision(reference, generated)
 
-    return {
-        "lead_id": lead_id,
-        "entry_id": entry["id"],
-        "stage": stage,
-        "reference": reference,
+    sample = {
+        **base,
+        "status": "ok",
         "generated": generated,
         "faithfulness": faith,
         "answer_relevance": relevance,
@@ -292,21 +437,30 @@ async def _evaluate_one_pair(
         "tokens": tokens,
         "duration_s": round(duration, 2),
     }
+    if diag:
+        sample["diagnostics"] = diag
+    return sample
 
 
 def _aggregate(samples: list[dict]) -> dict:
-    if not samples:
+    """Усредняет только успешные samples (status='ok')."""
+    ok = [s for s in samples if s.get("status") == "ok"]
+    if not ok:
         return {
             "faithfulness": 0.0, "answer_relevance": 0.0,
-            "context_precision": 0.0, "tps": 0.0, "samples": 0,
+            "context_precision": 0.0, "tps": 0.0,
+            "samples": 0, "samples_total": len(samples),
+            "samples_failed": len(samples),
         }
-    n = len(samples)
+    n = len(ok)
     return {
-        "faithfulness":       round(sum(s["faithfulness"] for s in samples) / n, 4),
-        "answer_relevance":   round(sum(s["answer_relevance"] for s in samples) / n, 4),
-        "context_precision":  round(sum(s["context_precision"] for s in samples) / n, 4),
-        "tps":                round(sum(s["tps"] for s in samples) / n, 4),
+        "faithfulness":       round(sum(s["faithfulness"]      for s in ok) / n, 4),
+        "answer_relevance":   round(sum(s["answer_relevance"]  for s in ok) / n, 4),
+        "context_precision":  round(sum(s["context_precision"] for s in ok) / n, 4),
+        "tps":                round(sum(s["tps"]               for s in ok) / n, 4),
         "samples":            n,
+        "samples_total":      len(samples),
+        "samples_failed":     len(samples) - n,
     }
 
 
@@ -334,6 +488,9 @@ async def _run_evaluation_task(
 
     samples: list[dict] = []
     async with httpx.AsyncClient() as judge_client:
+        # Диагностика: проверим, что judge и embedder отвечают вообще
+        await _diagnose_services(judge_client, settings)
+
         for lead_id in lead_ids:
             for entry in gold_entries:
                 if task.cancelled:
@@ -345,28 +502,28 @@ async def _run_evaluation_task(
                     rag, judge_client, settings, lead_id, entry,
                 )
                 task.done += 1
-                if sample:
-                    samples.append(sample)
-                    task.samples.append(sample)
+                samples.append(sample)
+                task.samples.append(sample)
             if task.cancelled:
                 break
 
     finished = datetime.now(timezone.utc)
     task.finished_at = finished.isoformat()
 
-    if not samples:
+    metrics = _aggregate(samples)
+
+    if metrics["samples"] == 0:
         task.status = "failed" if not task.cancelled else "completed"
-        task.error = "no successful samples" if not task.cancelled else None
+        task.error = "ни одного успешного sample (все попытки упали)" if not task.cancelled else None
         task.result = {
             "status": "no_samples",
-            "metrics": None,
+            "metrics": metrics,
             "odz": ODZ,
             "lead_ids": lead_ids,
-            "samples": [],
+            "samples": samples,
         }
         return
 
-    metrics = _aggregate(samples)
     _publish_to_prometheus(metrics, finished)
 
     task.status = "completed"
@@ -434,20 +591,20 @@ async def evaluate(rag: RAGClient, settings: Settings) -> dict:
             sample = await _evaluate_one_pair(
                 rag, judge_client, settings, "quality-eval", entry,
             )
-            if sample:
-                samples.append(sample)
+            samples.append(sample)
     finished = datetime.now(timezone.utc)
 
-    if not samples:
+    metrics = _aggregate(samples)
+    if metrics["samples"] == 0:
         return {
             "status": "no_samples",
-            "metrics": None, "odz": ODZ,
+            "metrics": metrics, "odz": ODZ,
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
             "duration_seconds": (finished - started).total_seconds(),
+            "samples": samples,
         }
 
-    metrics = _aggregate(samples)
     _publish_to_prometheus(metrics, finished)
     return {
         "status": "ok",

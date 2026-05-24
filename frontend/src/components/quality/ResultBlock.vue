@@ -33,7 +33,12 @@
     </div>
 
     <div v-if="result.lead_ids?.length" class="small text-muted mb-3">
-      Использованные лиды: {{ result.lead_ids.join(', ') }} · samples: {{ m.samples }}
+      Использованные лиды: {{ result.lead_ids.join(', ') }} ·
+      успешных samples: <strong>{{ m.samples }}</strong>
+      <span v-if="m.samples_failed">
+        · <span class="text-danger">failed: {{ m.samples_failed }}</span>
+      </span>
+      <span v-if="m.samples_total"> из {{ m.samples_total }}</span>
     </div>
 
     <div class="alert d-flex align-items-center gap-2" :class="allPass ? 'alert-success' : 'alert-warning'">
@@ -66,7 +71,25 @@
           </thead>
           <tbody>
             <template v-for="(s, i) in samples" :key="i">
-              <tr style="cursor: pointer" @click="toggle(i)">
+              <!-- Failed sample row -->
+              <tr v-if="s.status === 'failed'" style="cursor: pointer" @click="toggle(i)" class="table-danger">
+                <td>#{{ s.lead_id }}</td>
+                <td>
+                  <span class="badge rounded-pill px-2" :class="badge(s.stage)">
+                    {{ s.stage }}
+                  </span>
+                </td>
+                <td colspan="4" class="text-danger small">
+                  <i class="bi bi-x-circle-fill me-1"></i>
+                  failed: {{ s.error }}
+                </td>
+                <td class="text-center">
+                  <i class="bi" :class="opened[i] ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                </td>
+              </tr>
+
+              <!-- OK sample row -->
+              <tr v-else style="cursor: pointer" @click="toggle(i)">
                 <td>#{{ s.lead_id }}</td>
                 <td>
                   <span class="badge rounded-pill px-2" :class="badge(s.stage)">
@@ -89,9 +112,17 @@
                   <i class="bi" :class="opened[i] ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
                 </td>
               </tr>
+
+              <!-- Expanded -->
               <tr v-if="opened[i]">
                 <td colspan="7" class="bg-light">
-                  <div class="row g-3 p-2">
+                  <div v-if="s.status === 'failed'" class="p-2">
+                    <div class="small fw-semibold text-muted mb-1">Причина</div>
+                    <div class="small text-danger">{{ s.error }}</div>
+                    <div class="small fw-semibold text-muted mt-3 mb-1">Эталон (не использован)</div>
+                    <div class="small" style="white-space: pre-wrap">{{ s.reference }}</div>
+                  </div>
+                  <div v-else class="row g-3 p-2">
                     <div class="col-md-6">
                       <div class="small fw-semibold text-muted mb-1">Эталон</div>
                       <div class="small" style="white-space: pre-wrap">
@@ -104,6 +135,12 @@
                       </div>
                       <div class="small" style="white-space: pre-wrap">
                         {{ s.generated }}
+                      </div>
+                      <div v-if="s.diagnostics?.length" class="small text-warning mt-2">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <span v-for="(d, di) in s.diagnostics" :key="di">
+                          {{ d }}<span v-if="di < s.diagnostics.length - 1">; </span>
+                        </span>
                       </div>
                     </div>
                   </div>

@@ -60,6 +60,52 @@ def test_tokenize_strips_punctuation():
     assert "hello" in tokens and "world" in tokens and "привет" in tokens
 
 
+# ===== extract_text =====
+
+def test_extract_text_string():
+    assert q.extract_text("hello") == "hello"
+
+
+def test_extract_text_none():
+    assert q.extract_text(None) == ""
+
+
+def test_extract_text_picks_recommendation():
+    data = {
+        "title": "Test title",
+        "recommendation": "Главный текст рекомендации",
+        "reason": "Потому что",
+        "_system": {"task_id": "x", "lead_id": "153"},
+    }
+    out = q.extract_text(data)
+    assert "Главный текст рекомендации" in out
+    assert "Test title" in out
+    assert "Потому что" in out
+    assert "task_id" not in out
+    assert "_system" not in out
+
+
+def test_extract_text_fallback_to_other_strings():
+    data = {"foo": "Some text", "bar": "More text", "_system": {"x": 1}}
+    out = q.extract_text(data)
+    assert "Some text" in out
+    assert "More text" in out
+    assert "_system" not in out
+
+
+def test_extract_text_nested_dict():
+    data = {"recommendation": {"text": "Nested rec"}}
+    assert "Nested rec" in q.extract_text(data)
+
+
+def test_extract_text_list():
+    assert q.extract_text(["a", "b"]) == "a\nb"
+
+
+def test_extract_text_picks_text_field_when_no_recommendation():
+    assert "только text" in q.extract_text({"text": "только text"})
+
+
 # ===== gold dataset =====
 
 @pytest.mark.asyncio
@@ -181,9 +227,13 @@ async def test_start_evaluation_completes(tmp_path, settings, fake_rag):
     fake_rag.generate_recommendation = AsyncMock(
         return_value={"token": "tok", "status": "queued"}
     )
+    # data возвращается как dict — extract_text должен вытащить recommendation
     fake_rag.get_recommendations = AsyncMock(return_value={
         "lead_id": "1",
-        "recommendations": [{"id": "r", "type": "cold", "data": "hello world"}],
+        "recommendations": [{
+            "id": "r", "type": "cold",
+            "data": {"recommendation": "hello world", "_system": {"task_id": "x"}},
+        }],
     })
 
     with patch.object(q, "call_judge", AsyncMock(return_value=0.9)), \
@@ -205,7 +255,10 @@ async def test_start_evaluation_completes(tmp_path, settings, fake_rag):
     assert task.total == 2  # 2 leads × 1 entry
     assert task.done == 2
     assert task.result["metrics"]["samples"] == 2
+    assert task.result["metrics"]["samples_failed"] == 0
+    assert task.result["metrics"]["samples_total"] == 2
     assert task.result["metrics"]["faithfulness"] == 0.9
+    assert all(s["status"] == "ok" for s in task.result["samples"])
     assert QUALITY_FAITHFULNESS._value.get() == 0.9
     assert QUALITY_SAMPLES._value.get() == 2
 
