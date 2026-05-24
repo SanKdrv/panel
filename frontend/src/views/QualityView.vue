@@ -104,14 +104,55 @@
       Запустите оценку, чтобы увидеть метрики.
     </div>
 
+    <div class="card border-0 shadow-sm mt-4">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <div class="fw-semibold">Тренд метрик качества</div>
+          <select v-model.number="historyRange" class="form-select form-select-sm" style="width: 140px">
+            <option :value="3600">1 час</option>
+            <option :value="21600">6 часов</option>
+            <option :value="86400">24 часа</option>
+            <option :value="604800">7 дней</option>
+          </select>
+        </div>
+        <LineChart :series="historySeries" />
+      </div>
+    </div>
+
     <div v-if="error" class="alert alert-danger mt-3">{{ error }}</div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { qualityApi } from '../api/endpoints'
 import MetricCard from '../components/MetricCard.vue'
+import LineChart from '../components/LineChart.vue'
+
+const historyRange = ref(86400)
+const historySeries = ref([])
+
+const METRIC_LABELS = {
+  rag_faithfulness: 'Faithfulness',
+  rag_answer_relevance: 'Answer Relevance',
+  rag_context_precision: 'Context Precision',
+  rag_tps: 'TPS',
+}
+
+async function loadHistory() {
+  try {
+    const step = Math.max(60, Math.floor(historyRange.value / 200))
+    const data = await qualityApi.history(historyRange.value, step)
+    historySeries.value = Object.entries(data.metrics).map(([name, points]) => ({
+      label: METRIC_LABELS[name] || name,
+      points,
+    }))
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+watch(historyRange, loadHistory)
 
 const running = ref(false)
 const error = ref('')
@@ -181,6 +222,7 @@ async function runEvaluation() {
   try {
     await qualityApi.evaluate()
     await loadLatest()
+    await loadHistory()
   } catch (e) {
     error.value = e?.response?.data?.detail || e?.message || 'Ошибка'
   } finally {
@@ -198,5 +240,8 @@ function formatTime(iso) {
   }
 }
 
-onMounted(loadLatest)
+onMounted(async () => {
+  await loadLatest()
+  await loadHistory()
+})
 </script>

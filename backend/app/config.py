@@ -53,9 +53,13 @@ class Settings(BaseSettings):
         default="command-r7b-arabic", alias="QUALITY_JUDGE_MODEL"
     )
 
-    # --- Grafana embed ---
-    grafana_embed_url: str = Field(default="", alias="GRAFANA_EMBED_URL")
-    grafana_dashboard_url: str = Field(default="", alias="GRAFANA_DASHBOARD_URL")
+    # --- Prometheus (для графиков на экране мониторинга) ---
+    prometheus_url: str = Field(default="http://prometheus:9090", alias="PROMETHEUS_URL")
+
+    # --- Grafana ---
+    # Внешняя ссылка на Grafana (открывается в новой вкладке кнопкой
+    # «Открыть Grafana» на странице мониторинга).
+    grafana_external_url: str = Field(default="", alias="GRAFANA_EXTERNAL_URL")
 
     @computed_field
     @property

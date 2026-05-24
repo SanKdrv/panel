@@ -44,4 +44,19 @@ export const leadsApi = {
 export const qualityApi = {
   evaluate: () => api.post('/quality/evaluate').then((r) => r.data),
   latest: () => api.get('/quality/latest').then((r) => r.data),
+  history: (rangeSeconds = 86400, stepSeconds = 300) =>
+    api
+      .get('/monitoring/quality/history', {
+        params: { range: rangeSeconds, step: stepSeconds },
+      })
+      .then((r) => r.data),
+}
+
+export const monitoringApi = {
+  servers: (rangeSeconds = 3600, stepSeconds = 30) =>
+    api
+      .get('/monitoring/servers', {
+        params: { range: rangeSeconds, step: stepSeconds },
+      })
+      .then((r) => r.data),
 }

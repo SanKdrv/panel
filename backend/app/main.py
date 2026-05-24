@@ -12,7 +12,17 @@ from prometheus_client import make_asgi_app
 
 from .config import get_settings
 from .logging_config import configure_logging, reset_request_id, set_request_id
-from .routers import auth, documents, generate, leads, mautic, prompts, quality, system
+from .routers import (
+    auth,
+    documents,
+    generate,
+    leads,
+    mautic,
+    monitoring,
+    prompts,
+    quality,
+    system,
+)
 from .services.metrics import HTTP_REQUESTS
 from .services.rag_client_factory import shutdown_rag_client
 
@@ -98,3 +108,4 @@ app.include_router(generate.router)
 app.include_router(leads.router)
 app.include_router(mautic.router)
 app.include_router(quality.router)
+app.include_router(monitoring.router)

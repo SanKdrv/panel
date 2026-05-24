@@ -37,6 +37,5 @@ async def dashboard(
         health = {"status": "unhealthy", "error": str(exc), "components": {}}
     return {
         "health": health,
-        "grafana_embed_url": settings.grafana_embed_url,
-        "grafana_dashboard_url": settings.grafana_dashboard_url,
+        "grafana_external_url": settings.grafana_external_url,
     }
