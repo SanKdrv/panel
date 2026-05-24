@@ -78,7 +78,22 @@ const chartOptions = computed(() => ({
   scales: {
     x: {
       type: 'time',
-      time: { displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
+      time: {
+        tooltipFormat: 'dd MMM HH:mm:ss',
+        displayFormats: {
+          second: 'HH:mm:ss',
+          minute: 'HH:mm',
+          hour: 'HH:mm',
+          day: 'dd MMM',
+        },
+      },
+      ticks: {
+        autoSkip: true,
+        maxTicksLimit: 8,
+        maxRotation: 0,
+        minRotation: 0,
+        font: { size: 11 },
+      },
       grid: { display: false },
     },
     y: {

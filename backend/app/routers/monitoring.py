@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 PROMQL = {
-    "cpu":   '100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])))',
+    # avg without (cpu, mode) — агрегируем по ядрам и режимам,
+    # но сохраняем лейблы instance/role/job для маппинга в UI.
+    "cpu":   '100 * (1 - avg without (cpu, mode) (rate(node_cpu_seconds_total{mode="idle"}[2m])))',
     "ram":   '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100',
     "disk":  '(1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100',
 }
