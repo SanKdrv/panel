@@ -1,0 +1,11 @@
+# Default: text files normalized to LF in repo
+* text=auto eol=lf
+
+# Shell scripts must stay LF (иначе не запустятся в Linux-контейнере)
+*.sh text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

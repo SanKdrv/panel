@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Метрики самой админ-панели (Prometheus-клиент в FastAPI).
+  - job_name: "admin-panel-backend"
+    static_configs:
+      - targets: ["backend:8001"]
+
+  # node_exporter на сервере 1 (RAG-core: FastAPI, Qdrant, Redis, Mautic).
+  - job_name: "rag-core"
+    static_configs:
+      - targets: ["${RAG_EXPORTER_HOSTPORT}"]
+        labels:
+          role: "${RAG_SERVER_NAME}"
+
+  # node_exporter на сервере 2 (Ollama LLM).
+  - job_name: "ollama-llm"
+    static_configs:
+      - targets: ["${OLLAMA_EXPORTER_HOSTPORT}"]
+        labels:
+          role: "${OLLAMA_SERVER_NAME}"
+
+  # node_exporter на сервере 3 (Ollama embeddings).
+  - job_name: "embedding-worker"
+    static_configs:
+      - targets: ["${EMBEDDING_EXPORTER_HOSTPORT}"]
+        labels:
+          role: "${EMBEDDING_SERVER_NAME}"

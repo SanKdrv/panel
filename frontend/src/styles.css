@@ -1,0 +1,85 @@
+body { background: #f8f9fa; font-family: 'Segoe UI', sans-serif; }
+
+/* Sidebar */
+#sidebar {
+  width: 240px; min-height: 100vh;
+  background: #fff; border-right: 1px solid #dee2e6;
+  position: fixed; top: 0; left: 0; z-index: 100;
+}
+#sidebar .brand {
+  padding: 1rem 1.25rem;
+  font-weight: 700; font-size: 1rem;
+  border-bottom: 1px solid #dee2e6;
+  color: #0d6efd;
+}
+#sidebar .nav-link {
+  color: #495057; border-radius: 6px;
+  margin: 2px 8px; padding: 8px 12px;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+#sidebar .nav-link:hover  { background: #e9ecef; color: #212529; }
+#sidebar .nav-link.router-link-exact-active { background: #0d6efd; color: #fff; }
+#sidebar .nav-link i { margin-right: 8px; font-size: 1rem; }
+
+#main { margin-left: 240px; padding: 2rem; }
+.page-title { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: #212529; }
+
+/* Status badges */
+.badge-ready    { background: #d1fae5; color: #065f46; }
+.badge-unhealthy{ background: #fee2e2; color: #991b1b; }
+.badge-updating { background: #fef3c7; color: #92400e; }
+
+.comp-card {
+  border: 1px solid #dee2e6; border-radius: 10px;
+  padding: 1rem 1.25rem; background: #fff;
+}
+.comp-card .comp-name { font-weight: 600; font-size: 0.95rem; }
+.comp-card .comp-latency { font-size: 0.8rem; color: #6c757d; }
+
+/* Login */
+.login-overlay {
+  position: fixed; inset: 0;
+  background: #f0f4f8;
+  display: flex; align-items: center; justify-content: center; z-index: 200;
+}
+.login-card {
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.10);
+  padding: 2.5rem 2rem; width: 360px;
+}
+.login-card .brand-logo {
+  font-size: 1.5rem; font-weight: 700;
+  color: #0d6efd; text-align: center; margin-bottom: 0.25rem;
+}
+.login-card .brand-sub {
+  text-align: center; color: #6c757d;
+  font-size: 0.85rem; margin-bottom: 2rem;
+}
+
+.grafana-placeholder {
+  background: #e9ecef; border: 2px dashed #adb5bd;
+  border-radius: 10px; height: 420px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: #6c757d;
+}
+
+.timeline-item { border-left: 2px solid #dee2e6; padding: 0 0 1rem 1rem; position: relative; }
+.timeline-item::before {
+  content: ''; position: absolute; left: -5px; top: 4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #0d6efd;
+}
+
+.status-pass { color: #065f46; font-weight: 600; }
+.status-fail { color: #991b1b; font-weight: 600; }
+
+.step-indicator .step {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.875rem; color: #6c757d; margin-bottom: 6px;
+}
+.step.done   .step-dot { background: #0d6efd; }
+.step.active .step-dot { background: #ffc107; }
+.step.wait   .step-dot { background: #dee2e6; }
+.step-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
