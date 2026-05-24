@@ -99,8 +99,54 @@ async def delete_gold(
         raise HTTPException(status_code=404, detail="entry not found")
 
 
-# ----- find leads -----
+# ----- find leads (async search) -----
 
+@router.post("/leads/search")
+async def start_leads_search(
+    body: FindLeadsRequest,
+    rag: RAGClient = Depends(get_rag_client),
+) -> dict:
+    if body.min_id > body.max_id:
+        raise HTTPException(status_code=400, detail="min_id must be <= max_id")
+    try:
+        search_id = await quality_service.start_lead_search(
+            rag, body.min_id, body.max_id, body.n, min_actions=body.min_actions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"search_id": search_id, "status": "running"}
+
+
+@router.get("/leads/search/{search_id}")
+async def get_leads_search(search_id: str) -> dict:
+    s = quality_service.get_lead_search(search_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="search not found")
+    return {
+        "search_id": s.id,
+        "status": s.status,
+        "found": s.found,
+        "attempts": s.attempts,
+        "max_attempts": s.max_attempts,
+        "target_n": s.target_n,
+        "min_id": s.min_id,
+        "max_id": s.max_id,
+        "min_actions": s.min_actions,
+        "started_at": s.started_at,
+        "finished_at": s.finished_at,
+        "error": s.error,
+    }
+
+
+@router.post("/leads/search/{search_id}/cancel")
+async def cancel_leads_search(search_id: str) -> dict:
+    ok = quality_service.cancel_lead_search(search_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="search not cancellable")
+    return {"status": "cancelling"}
+
+
+# Сохраняем старый sync эндпоинт для обратной совместимости с тестами.
 @router.post("/leads/find")
 async def find_leads(
     body: FindLeadsRequest,

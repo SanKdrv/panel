@@ -395,6 +395,108 @@ def _reset_for_tests() -> None:
 
 # ---------- find leads ----------
 
+# ---------- lead search (async task) ----------
+
+@dataclass
+class LeadSearchState:
+    id: str
+    status: str = "running"            # running | done | cancelled
+    started_at: str = ""
+    finished_at: str | None = None
+    found: list[dict] = field(default_factory=list)
+    attempts: int = 0
+    max_attempts: int = 0
+    target_n: int = 0
+    min_id: int = 0
+    max_id: int = 0
+    min_actions: int = 1
+    cancelled: bool = False
+    error: str | None = None
+
+
+_lead_searches: dict[str, LeadSearchState] = {}
+
+
+def get_lead_search(search_id: str) -> LeadSearchState | None:
+    return _lead_searches.get(search_id)
+
+
+def cancel_lead_search(search_id: str) -> bool:
+    s = _lead_searches.get(search_id)
+    if not s or s.status != "running":
+        return False
+    s.cancelled = True
+    return True
+
+
+async def start_lead_search(
+    rag: RAGClient,
+    min_id: int,
+    max_id: int,
+    n: int,
+    min_actions: int = 1,
+) -> str:
+    if min_id > max_id or n <= 0 or min_actions < 1:
+        raise ValueError("invalid search params")
+
+    import random
+    search_id = uuid.uuid4().hex[:12]
+    pool = list(range(min_id, max_id + 1))
+    random.shuffle(pool)
+    max_attempts = min(len(pool), max(n * 5 * min_actions, 25))
+
+    state = LeadSearchState(
+        id=search_id,
+        started_at=datetime.now(timezone.utc).isoformat(),
+        target_n=n, min_id=min_id, max_id=max_id, min_actions=min_actions,
+        max_attempts=max_attempts,
+    )
+    _lead_searches[search_id] = state
+
+    asyncio.create_task(_run_lead_search(rag, state, pool))
+    return search_id
+
+
+async def _run_lead_search(
+    rag: RAGClient,
+    state: LeadSearchState,
+    pool: list[int],
+) -> None:
+    try:
+        for lead_id in pool:
+            if state.cancelled:
+                break
+            if len(state.found) >= state.target_n:
+                break
+            if state.attempts >= state.max_attempts:
+                break
+            state.attempts += 1
+            try:
+                data = await rag.get_lead_actions(str(lead_id))
+                actions = data.get("actions") or []
+                if len(actions) >= state.min_actions:
+                    state.found.append({
+                        "lead_id": str(lead_id),
+                        "actions_count": len(actions),
+                    })
+            except Exception as exc:
+                logger.debug("event=find_leads.skip lead_id=%s err=%s", lead_id, exc)
+                continue
+    except Exception as exc:
+        logger.exception("event=find_leads.task_error search=%s", state.id)
+        state.error = _fmt_exc(exc)
+    finally:
+        state.finished_at = datetime.now(timezone.utc).isoformat()
+        state.status = "cancelled" if state.cancelled else "done"
+
+
+def _reset_lead_searches_for_tests() -> None:
+    global _lead_searches
+    _lead_searches = {}
+
+
+# ---------- legacy synchronous (used in test) ----------
+
 async def find_valid_leads(
     rag: RAGClient,
     min_id: int,

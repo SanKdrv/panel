@@ -51,15 +51,20 @@ export const qualityApi = {
   deleteGold: (id) => api.delete(`/quality/gold/${id}`).then((r) => r.data),
 
   // Lead picker
-  findLeads: (minId, maxId, n, minActions = 1) =>
+  // Async lead search: возвращает search_id, дальше polling
+  startLeadsSearch: (minId, maxId, n, minActions = 1) =>
     api
-      .post('/quality/leads/find', {
+      .post('/quality/leads/search', {
         min_id: minId,
         max_id: maxId,
         n,
         min_actions: minActions,
       })
       .then((r) => r.data),
+  getLeadsSearch: (searchId) =>
+    api.get(`/quality/leads/search/${searchId}`).then((r) => r.data),
+  cancelLeadsSearch: (searchId) =>
+    api.post(`/quality/leads/search/${searchId}/cancel`).then((r) => r.data),
 
   // Tasks
   startTask: (leadIds, stages = null) =>

@@ -30,10 +30,39 @@
         action{{ form.minActions === 1 ? '' : 's' }} в RAG-системе, и
         предложим выбрать кого включить в прогон.
       </p>
-      <button class="btn btn-primary" :disabled="finding" @click="findLeads">
-        <i class="bi bi-search me-2"></i>
-        {{ finding ? 'Поиск...' : 'Найти лидов' }}
+      <button v-if="!searching" class="btn btn-primary" @click="startSearch">
+        <i class="bi bi-search me-2"></i>Найти лидов
       </button>
+
+      <!-- Прогресс поиска -->
+      <div v-else>
+        <div class="d-flex justify-content-between small text-muted mb-1">
+          <span>
+            <i class="bi bi-arrow-repeat me-1"></i>
+            Найдено: <strong>{{ foundLeads.length }}</strong> /
+            {{ form.n }} ·
+            проверено: {{ searchAttempts }} / {{ searchMaxAttempts }}
+          </span>
+          <span>{{ searchStatus }}</span>
+        </div>
+        <div class="progress mb-3" style="height: 4px">
+          <div
+            class="progress-bar bg-primary"
+            :style="{ width: searchProgressPercent + '%' }"
+          ></div>
+        </div>
+        <div class="d-flex gap-2">
+          <button
+            class="btn btn-outline-danger"
+            :disabled="cancellingSearch"
+            @click="stopAndUse"
+          >
+            <i class="bi bi-stop-circle me-1"></i>
+            {{ cancellingSearch ? 'Останавливается...' : 'Остановить и взять что найдено' }}
+          </button>
+        </div>
+      </div>
+
       <div v-if="error" class="alert alert-danger mt-3 py-2 small">{{ error }}</div>
     </div>
 
@@ -144,11 +173,27 @@ const form = ref({ min: 1, max: 200, n: 5, minActions: 1 })
 
 const ACTIVE_TASK_KEY = 'quality_active_task_id'
 
-const finding = ref(false)
+// --- async lead search state ---
+const searching = ref(false)
+const searchId = ref('')
+const searchAttempts = ref(0)
+const searchMaxAttempts = ref(0)
+const searchStatus = ref('')
+const cancellingSearch = ref(false)
+let searchPollTimer = null
+
 const error = ref('')
 
 const foundLeads = ref([])
 const selectedSet = ref({})
+
+const searchProgressPercent = computed(() => {
+  if (!searchMaxAttempts.value) return 0
+  return Math.min(
+    100,
+    Math.round((searchAttempts.value / searchMaxAttempts.value) * 100),
+  )
+})
 
 const task = ref(null)
 const goldCount = ref(4)
@@ -175,37 +220,74 @@ const statusBadge = computed(() => {
   return 'bg-secondary'
 })
 
-async function findLeads() {
+async function startSearch() {
   error.value = ''
-  finding.value = true
+  foundLeads.value = []
+  selectedSet.value = {}
+  searchAttempts.value = 0
+  searchMaxAttempts.value = 0
+  searchStatus.value = 'старт'
+  cancellingSearch.value = false
+
   try {
-    const data = await qualityApi.findLeads(
-      form.value.min,
-      form.value.max,
-      form.value.n,
-      form.value.minActions,
+    const data = await qualityApi.startLeadsSearch(
+      form.value.min, form.value.max, form.value.n, form.value.minActions,
     )
-    foundLeads.value = data.found || []
-    selectedSet.value = {}
-    foundLeads.value.forEach((l) => (selectedSet.value[l.lead_id] = true))
+    searchId.value = data.search_id
+    searching.value = true
+    startSearchPolling()
 
-    // Получим число gold-эталонов чтобы показать оценку времени
-    try {
-      const gold = await qualityApi.listGold()
-      goldCount.value = (gold.entries || []).length || 1
-    } catch {
-      /* ignore */
-    }
-
-    if (!foundLeads.value.length) {
-      error.value = 'Не найдено ни одного валидного лида в диапазоне'
-      return
-    }
-    step.value = 'pick'
+    // Параллельно подтянем число эталонов для оценки времени
+    qualityApi
+      .listGold()
+      .then((g) => (goldCount.value = (g.entries || []).length || 1))
+      .catch(() => {})
   } catch (e) {
     error.value = e?.response?.data?.detail || e?.message
-  } finally {
-    finding.value = false
+    searching.value = false
+  }
+}
+
+function startSearchPolling() {
+  if (searchPollTimer) clearInterval(searchPollTimer)
+  searchPollTimer = setInterval(async () => {
+    if (!searchId.value) return
+    try {
+      const s = await qualityApi.getLeadsSearch(searchId.value)
+      foundLeads.value = s.found || []
+      // авто-выделение каждого нового найденного
+      foundLeads.value.forEach((l) => {
+        if (selectedSet.value[l.lead_id] === undefined) {
+          selectedSet.value[l.lead_id] = true
+        }
+      })
+      searchAttempts.value = s.attempts
+      searchMaxAttempts.value = s.max_attempts
+      searchStatus.value = s.status
+      if (s.status !== 'running') {
+        clearInterval(searchPollTimer)
+        searchPollTimer = null
+        searching.value = false
+        cancellingSearch.value = false
+        if (!foundLeads.value.length) {
+          error.value = 'Не найдено ни одного валидного лида'
+        } else {
+          step.value = 'pick'
+        }
+      }
+    } catch (e) {
+      /* keep polling */
+    }
+  }, 1500)
+}
+
+async function stopAndUse() {
+  if (!searchId.value || cancellingSearch.value) return
+  cancellingSearch.value = true
+  try {
+    await qualityApi.cancelLeadsSearch(searchId.value)
+  } catch (e) {
+    cancellingSearch.value = false
   }
 }
 
@@ -269,6 +351,7 @@ function restart() {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (searchPollTimer) clearInterval(searchPollTimer)
 })
 
 onMounted(async () => {
