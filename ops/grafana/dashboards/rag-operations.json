@@ -195,9 +195,9 @@
       },
       "pluginVersion": "11.2.0",
       "targets": [
-        {"expr": "rag_faithfulness", "legendFormat": "faithfulness", "refId": "A"}
+        {"expr": "rag_reference_alignment", "legendFormat": "reference_alignment", "refId": "A"}
       ],
-      "title": "Faithfulness",
+      "title": "Reference Alignment",
       "type": "stat"
     },
     {
@@ -312,7 +312,7 @@
         "tooltip": {"mode": "multi"}
       },
       "targets": [
-        {"expr": "rag_faithfulness", "legendFormat": "Faithfulness", "refId": "A"},
+        {"expr": "rag_reference_alignment", "legendFormat": "Reference Alignment", "refId": "A"},
         {"expr": "rag_answer_relevance", "legendFormat": "Answer Relevance", "refId": "B"},
         {"expr": "rag_context_precision", "legendFormat": "Context Precision", "refId": "C"}
       ],

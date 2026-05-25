@@ -4,6 +4,9 @@
     <div class="fw-bold fs-3 mt-1" :class="colorClass">
       {{ formattedValue }}
     </div>
+    <div v-if="ci && ci.length === 2" class="small text-muted">
+      95% CI: {{ fmtCi(ci[0]) }} – {{ fmtCi(ci[1]) }}
+    </div>
     <div class="small text-muted">ОДЗ: ≥ {{ odz }}{{ unit }}</div>
   </div>
 </template>
@@ -17,6 +20,7 @@ const props = defineProps({
   odz: { type: Number, required: true },
   unit: { type: String, default: '' },
   higherIsBetter: { type: Boolean, default: true },
+  ci: { type: Array, default: null }, // [low, high]
 })
 
 const formattedValue = computed(() => {
@@ -29,4 +33,8 @@ const colorClass = computed(() => {
   const ok = props.higherIsBetter ? props.value >= props.odz : props.value <= props.odz
   return ok ? 'text-success' : 'text-danger'
 })
+
+function fmtCi(v) {
+  return props.unit ? v.toFixed(1) : v.toFixed(2)
+}
 </script>

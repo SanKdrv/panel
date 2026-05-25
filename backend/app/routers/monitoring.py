@@ -32,7 +32,7 @@ PROMQL = {
 }
 
 QUALITY_METRICS = (
-    "rag_faithfulness",
+    "rag_reference_alignment",
     "rag_answer_relevance",
     "rag_context_precision",
     "rag_tps",

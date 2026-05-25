@@ -17,7 +17,7 @@
             <th style="width: 170px">Время</th>
             <th style="width: 120px">Статус</th>
             <th class="text-end">Samples</th>
-            <th class="text-end">Faith</th>
+            <th class="text-end">Ref.Align</th>
             <th class="text-end">Rel</th>
             <th class="text-end">Prec</th>
             <th class="text-end">TPS</th>
@@ -42,7 +42,7 @@
               </span>
               <span v-else class="text-muted">—</span>
             </td>
-            <td class="text-end small">{{ num(t, 'faithfulness') }}</td>
+            <td class="text-end small">{{ num(t, 'reference_alignment') }}</td>
             <td class="text-end small">{{ num(t, 'answer_relevance') }}</td>
             <td class="text-end small">{{ num(t, 'context_precision') }}</td>
             <td class="text-end small">{{ num(t, 'tps') }}</td>

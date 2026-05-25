@@ -3,9 +3,10 @@
     <div class="row g-3 mb-3">
       <div class="col-md-3">
         <MetricCard
-          label="Faithfulness"
-          :value="m.faithfulness"
-          :odz="odz.faithfulness"
+          label="Reference Alignment"
+          :value="m.reference_alignment"
+          :odz="odz.reference_alignment"
+          :ci="m.ci?.reference_alignment"
         />
       </div>
       <div class="col-md-3">
@@ -13,6 +14,7 @@
           label="Answer Relevance"
           :value="m.answer_relevance"
           :odz="odz.answer_relevance"
+          :ci="m.ci?.answer_relevance"
         />
       </div>
       <div class="col-md-3">
@@ -20,6 +22,7 @@
           label="Context Precision"
           :value="m.context_precision"
           :odz="odz.context_precision"
+          :ci="m.ci?.context_precision"
         />
       </div>
       <div class="col-md-3">
@@ -28,6 +31,7 @@
           :value="m.tps"
           :odz="odz.tps"
           unit=" т/с"
+          :ci="m.ci?.tps"
         />
       </div>
     </div>
@@ -96,8 +100,8 @@
                     {{ s.stage }}
                   </span>
                 </td>
-                <td class="text-end" :class="cls(s.faithfulness, odz.faithfulness)">
-                  {{ s.faithfulness.toFixed(2) }}
+                <td class="text-end" :class="cls(s.reference_alignment, odz.reference_alignment)">
+                  {{ s.reference_alignment.toFixed(2) }}
                 </td>
                 <td class="text-end" :class="cls(s.answer_relevance, odz.answer_relevance)">
                   {{ s.answer_relevance.toFixed(2) }}
@@ -185,7 +189,7 @@ function toggle(i) {
 const allPass = computed(() => {
   if (!m.value) return false
   return (
-    m.value.faithfulness      >= (odz.value.faithfulness      || 0) &&
+    m.value.reference_alignment      >= (odz.value.reference_alignment      || 0) &&
     m.value.answer_relevance  >= (odz.value.answer_relevance  || 0) &&
     m.value.context_precision >= (odz.value.context_precision || 0) &&
     m.value.tps               >= (odz.value.tps               || 0)

@@ -15,9 +15,9 @@ HTTP_REQUESTS = Counter(
 )
 
 # --- RAG quality (filled by the quality evaluator) ---
-QUALITY_FAITHFULNESS = Gauge(
-    "rag_faithfulness",
-    "Mean Faithfulness over the gold test-set (0..1)",
+QUALITY_REFERENCE_ALIGNMENT = Gauge(
+    "rag_reference_alignment",
+    "Mean Reference Alignment (LLM-as-judge vs gold reference) over the test-set (0..1)",
 )
 QUALITY_ANSWER_RELEVANCE = Gauge(
     "rag_answer_relevance",

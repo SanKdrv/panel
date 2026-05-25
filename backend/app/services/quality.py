@@ -5,7 +5,7 @@
 - Поддержка списка lead_ids — картезиан (lead × gold entry).
 - Асинхронные таски с прогрессом (для длинных прогонов).
 - Detail на каждую сгенерированную пару (для дрилл-дауна в UI).
-- Без изменений: Faithfulness (LLM-as-judge), Answer Relevance (cosine),
+- Без изменений: Reference Alignment (LLM-as-judge), Answer Relevance (cosine),
   Context Precision (keyword overlap), TPS, публикация в Prometheus.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from . import quality_history
 from .metrics import (
     QUALITY_ANSWER_RELEVANCE,
     QUALITY_CONTEXT_PRECISION,
-    QUALITY_FAITHFULNESS,
+    QUALITY_REFERENCE_ALIGNMENT,
     QUALITY_RUN_TIMESTAMP,
     QUALITY_SAMPLES,
     QUALITY_TPS,
@@ -38,7 +38,7 @@ from .rag_client import RAGClient
 logger = logging.getLogger(__name__)
 
 ODZ = {
-    "faithfulness": 0.80,
+    "reference_alignment": 0.80,
     "answer_relevance": 0.75,
     "context_precision": 0.70,
     "tps": 5.0,
@@ -680,7 +680,7 @@ async def _evaluate_one_pair(
     tokens = max(len(_tokenize(generated)), 1)
     tps = tokens_for_tps / duration
 
-    # Faithfulness
+    # Reference Alignment (бывш. Faithfulness)
     faith = await call_judge(
         judge_client,
         settings.quality_judge_url, settings.quality_judge_model,
@@ -711,7 +711,7 @@ async def _evaluate_one_pair(
         **base,
         "status": "ok",
         "generated": generated,
-        "faithfulness": faith,
+        "reference_alignment": faith,
         "answer_relevance": relevance,
         "context_precision": precision,
         "tps": round(tps, 3),
@@ -724,30 +724,75 @@ async def _evaluate_one_pair(
     return sample
 
 
+_METRIC_KEYS = (
+    "reference_alignment",
+    "answer_relevance",
+    "context_precision",
+    "tps",
+)
+
+
+def _bootstrap_ci(
+    values: list[float],
+    *,
+    n_resamples: int = 1000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Bootstrap percentile CI для среднего.
+
+    Из выборки values берём n_resamples псевдо-выборок того же размера
+    с возвратом, считаем mean у каждой, возвращаем (low, high) перцентили.
+    """
+    if not values:
+        return (0.0, 0.0)
+    if len(values) == 1:
+        v = float(values[0])
+        return (v, v)
+    import random as _r
+    rng = _r.Random(seed)
+    n = len(values)
+    means = []
+    for _ in range(n_resamples):
+        sample = [values[rng.randrange(n)] for _ in range(n)]
+        means.append(sum(sample) / n)
+    means.sort()
+    alpha = (1.0 - confidence) / 2.0
+    lo_idx = max(0, int(alpha * n_resamples))
+    hi_idx = min(n_resamples - 1, int((1.0 - alpha) * n_resamples))
+    return (round(means[lo_idx], 4), round(means[hi_idx], 4))
+
+
 def _aggregate(samples: list[dict]) -> dict:
-    """Усредняет только успешные samples (status='ok')."""
+    """Усредняет только успешные samples (status='ok') + bootstrap CI."""
     ok = [s for s in samples if s.get("status") == "ok"]
     if not ok:
         return {
-            "faithfulness": 0.0, "answer_relevance": 0.0,
+            "reference_alignment": 0.0, "answer_relevance": 0.0,
             "context_precision": 0.0, "tps": 0.0,
+            "ci": {k: [0.0, 0.0] for k in _METRIC_KEYS},
             "samples": 0, "samples_total": len(samples),
             "samples_failed": len(samples),
         }
     n = len(ok)
+    means: dict[str, float] = {}
+    ci: dict[str, list[float]] = {}
+    for key in _METRIC_KEYS:
+        vals = [float(s[key]) for s in ok]
+        means[key] = round(sum(vals) / n, 4)
+        lo, hi = _bootstrap_ci(vals)
+        ci[key] = [lo, hi]
     return {
-        "faithfulness":       round(sum(s["faithfulness"]      for s in ok) / n, 4),
-        "answer_relevance":   round(sum(s["answer_relevance"]  for s in ok) / n, 4),
-        "context_precision":  round(sum(s["context_precision"] for s in ok) / n, 4),
-        "tps":                round(sum(s["tps"]               for s in ok) / n, 4),
-        "samples":            n,
-        "samples_total":      len(samples),
-        "samples_failed":     len(samples) - n,
+        **means,
+        "ci":             ci,
+        "samples":        n,
+        "samples_total":  len(samples),
+        "samples_failed": len(samples) - n,
     }
 
 
 def _publish_to_prometheus(metrics: dict, finished_at: datetime) -> None:
-    QUALITY_FAITHFULNESS.set(metrics["faithfulness"])
+    QUALITY_REFERENCE_ALIGNMENT.set(metrics["reference_alignment"])
     QUALITY_ANSWER_RELEVANCE.set(metrics["answer_relevance"])
     QUALITY_CONTEXT_PRECISION.set(metrics["context_precision"])
     QUALITY_TPS.set(metrics["tps"])

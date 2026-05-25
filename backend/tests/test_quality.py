@@ -11,7 +11,7 @@ import pytest
 from app.services import gold_dataset as gold_service
 from app.services import quality as q
 from app.services.metrics import (
-    QUALITY_FAITHFULNESS,
+    QUALITY_REFERENCE_ALIGNMENT,
     QUALITY_SAMPLES,
 )
 from app.routers import quality as quality_router
@@ -58,6 +58,32 @@ def test_cosine_mismatched_length():
 def test_tokenize_strips_punctuation():
     tokens = q._tokenize("Hello, world! Привет.")
     assert "hello" in tokens and "world" in tokens and "привет" in tokens
+
+
+# ===== bootstrap CI =====
+
+def test_bootstrap_ci_empty():
+    assert q._bootstrap_ci([]) == (0.0, 0.0)
+
+
+def test_bootstrap_ci_single_value():
+    assert q._bootstrap_ci([0.7]) == (0.7, 0.7)
+
+
+def test_bootstrap_ci_brackets_mean():
+    values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    lo, hi = q._bootstrap_ci(values, n_resamples=2000)
+    mean = sum(values) / len(values)
+    assert lo < mean < hi
+    # 95% CI для такой выборки умещается в ~±0.2
+    assert hi - lo < 0.5
+
+
+def test_bootstrap_ci_tight_for_constant_values():
+    """Если все values одинаковы — CI почти схлопывается в точку."""
+    values = [0.5] * 20
+    lo, hi = q._bootstrap_ci(values)
+    assert lo == 0.5 and hi == 0.5
 
 
 # ===== extract_text =====
@@ -285,9 +311,9 @@ async def test_start_evaluation_completes(tmp_path, settings, fake_rag):
     assert task.result["metrics"]["samples"] == 2
     assert task.result["metrics"]["samples_failed"] == 0
     assert task.result["metrics"]["samples_total"] == 2
-    assert task.result["metrics"]["faithfulness"] == 0.9
+    assert task.result["metrics"]["reference_alignment"] == 0.9
     assert all(s["status"] == "ok" for s in task.result["samples"])
-    assert QUALITY_FAITHFULNESS._value.get() == 0.9
+    assert QUALITY_REFERENCE_ALIGNMENT._value.get() == 0.9
     assert QUALITY_SAMPLES._value.get() == 2
 
 

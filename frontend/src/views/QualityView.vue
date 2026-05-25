@@ -80,7 +80,7 @@
 
       <div class="card border-0 shadow-sm p-4 mb-3">
         <div class="small text-muted mb-2">
-          Faithfulness · Answer Relevance · Context Precision (0…1)
+          Reference Alignment · Answer Relevance · Context Precision (0…1)
         </div>
         <LineChart :series="qualitySeries" :y-max="1" :y-min="0" />
       </div>
@@ -106,14 +106,14 @@ const historyRange = ref(86400)
 const historyData = ref({}) // map metric_name -> points[]
 
 const METRIC_LABELS = {
-  rag_faithfulness: 'Faithfulness',
+  rag_reference_alignment: 'Reference Alignment',
   rag_answer_relevance: 'Answer Relevance',
   rag_context_precision: 'Context Precision',
   rag_tps: 'TPS',
 }
 
 const QUALITY_KEYS = [
-  'rag_faithfulness',
+  'rag_reference_alignment',
   'rag_answer_relevance',
   'rag_context_precision',
 ]

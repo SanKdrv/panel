@@ -12,9 +12,9 @@
       "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1}, "overrides": []},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
       "id": 1,
-      "title": "Faithfulness",
+      "title": "Reference Alignment",
       "type": "stat",
-      "targets": [{"expr": "rag_faithfulness", "refId": "A"}]
+      "targets": [{"expr": "rag_reference_alignment", "refId": "A"}]
     },
     {
       "datasource": "Prometheus",
@@ -51,7 +51,7 @@
       "title": "Trend: quality metrics",
       "type": "timeseries",
       "targets": [
-        {"expr": "rag_faithfulness", "refId": "A", "legendFormat": "Faithfulness"},
+        {"expr": "rag_reference_alignment", "refId": "A", "legendFormat": "Reference Alignment"},
         {"expr": "rag_answer_relevance", "refId": "B", "legendFormat": "Answer Relevance"},
         {"expr": "rag_context_precision", "refId": "C", "legendFormat": "Context Precision"}
       ]

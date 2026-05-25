@@ -5,9 +5,9 @@ import MetricCard from '../components/MetricCard.vue'
 describe('MetricCard', () => {
   it('renders label, value, odz', () => {
     const wrapper = mount(MetricCard, {
-      props: { label: 'Faithfulness', value: 0.87, odz: 0.8 },
+      props: { label: 'Reference Alignment', value: 0.87, odz: 0.8 },
     })
-    expect(wrapper.text()).toContain('Faithfulness')
+    expect(wrapper.text()).toContain('Reference Alignment')
     expect(wrapper.text()).toContain('0.87')
     expect(wrapper.text()).toContain('0.8')
   })
