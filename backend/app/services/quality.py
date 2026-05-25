@@ -620,13 +620,20 @@ async def _evaluate_one_pair(
         logger.info("event=quality.poll.done token=%s status=%s", token, poll_status)
 
         recovery_note: str | None = None
+        recovered = False
         if poll_status != "completed":
-            # RAG сообщил failed/timeout/errors. Но он мог соврать —
-            # генерация могла всё-таки завершиться. Заглядываем в
-            # /recommendations и ищем НОВУЮ запись.
-            recovery_note = f"poll вернул {poll_status}, ищем рекомендацию вручную"
-            logger.warning("event=quality.poll.recovery_attempt token=%s reason=%s",
-                           token, poll_status)
+            # RAG сообщил failed/timeout/errors. Но он мог соврать — генерация
+            # могла довестись чуть позже. Ждём 30 секунд и заглядываем
+            # в /recommendations, ищем НОВУЮ запись (которой не было до /generate).
+            recovery_note = (
+                f"poll вернул {poll_status}, ждём 30 с и проверяем "
+                f"список рекомендаций"
+            )
+            logger.warning(
+                "event=quality.recover.attempt token=%s lead=%s stage=%s reason=%s",
+                token, lead_id, stage, poll_status,
+            )
+            await asyncio.sleep(30)
 
         try:
             recs = await _call_with_retry(
@@ -634,7 +641,6 @@ async def _evaluate_one_pair(
                 what=f"get_recommendations(lead={lead_id})",
             )
         except Exception as exc:
-            # Если poll сказал не completed и достать не удалось — финальный fail.
             if poll_status != "completed":
                 return {**base, "status": "failed",
                         "error": f"poll={poll_status}; get_recommendations: {_fmt_exc(exc)}"}
@@ -645,16 +651,29 @@ async def _evaluate_one_pair(
             return {**base, "status": "failed",
                     "error": f"GET /recommendations пуст; poll={poll_status}"}
 
-        # Берём новую запись (которой не было до prepoll). Если все знакомые —
-        # вероятно генерация не довелась, но возьмём первую (RAG обычно
-        # сортирует от свежей к старой).
         new_items = [r for r in items if r.get("id") not in pre_ids]
         if not new_items and poll_status != "completed":
-            # Реально нет ничего нового — это уже точный fail
+            # Никаких новых записей не появилось даже после паузы — настоящий fail
+            logger.info(
+                "event=quality.recover.empty lead=%s stage=%s — новых записей нет",
+                lead_id, stage,
+            )
             return {**base, "status": "failed",
-                    "error": f"poll={poll_status}, новых рекомендаций нет"}
+                    "error": (
+                        f"poll={poll_status}; за 30 с после фейла "
+                        f"новых рекомендаций не появилось"
+                    )}
+
         chosen = new_items[0] if new_items else items[0]
-        if not new_items:
+        if poll_status != "completed" and new_items:
+            # Зафиксировали восстановление: poll сказал fail, но мы нашли
+            # фактически сгенерированную RAG'ом новую рекомендацию.
+            recovered = True
+            logger.info(
+                "event=quality.recover.ok lead=%s stage=%s new_id=%s",
+                lead_id, stage, chosen.get("id"),
+            )
+        elif not new_items:
             recovery_note = (recovery_note or "") + "; новых записей нет, взяли первую"
 
         raw_data = chosen.get("data")
@@ -710,6 +729,7 @@ async def _evaluate_one_pair(
     sample = {
         **base,
         "status": "ok",
+        "recovered": recovered,
         "generated": generated,
         "reference_alignment": faith,
         "answer_relevance": relevance,
@@ -773,6 +793,7 @@ def _aggregate(samples: list[dict]) -> dict:
             "ci": {k: [0.0, 0.0] for k in _METRIC_KEYS},
             "samples": 0, "samples_total": len(samples),
             "samples_failed": len(samples),
+            "samples_recovered": 0,
         }
     n = len(ok)
     means: dict[str, float] = {}
@@ -784,10 +805,11 @@ def _aggregate(samples: list[dict]) -> dict:
         ci[key] = [lo, hi]
     return {
         **means,
-        "ci":             ci,
-        "samples":        n,
-        "samples_total":  len(samples),
-        "samples_failed": len(samples) - n,
+        "ci":                ci,
+        "samples":           n,
+        "samples_total":     len(samples),
+        "samples_failed":    len(samples) - n,
+        "samples_recovered": sum(1 for s in ok if s.get("recovered")),
     }
 
 

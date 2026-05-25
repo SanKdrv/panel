@@ -39,6 +39,15 @@
     <div v-if="result.lead_ids?.length" class="small text-muted mb-3">
       Использованные лиды: {{ result.lead_ids.join(', ') }} ·
       успешных samples: <strong>{{ m.samples }}</strong>
+      <span v-if="m.samples_recovered">
+        ·
+        <span
+          class="text-warning"
+          title="poll вернул fail, но после паузы 30 с в RAG нашлась новая рекомендация"
+        >
+          восстановлено: {{ m.samples_recovered }}
+        </span>
+      </span>
       <span v-if="m.samples_failed">
         · <span class="text-danger">failed: {{ m.samples_failed }}</span>
       </span>
@@ -98,6 +107,13 @@
                 <td>
                   <span class="badge rounded-pill px-2" :class="badge(s.stage)">
                     {{ s.stage }}
+                  </span>
+                  <span
+                    v-if="s.recovered"
+                    class="badge rounded-pill bg-warning text-dark px-2 ms-1"
+                    title="восстановлен: poll сказал fail, но рекомендация всё-таки появилась"
+                  >
+                    восст.
                   </span>
                 </td>
                 <td class="text-end" :class="cls(refAlign(s), odz.reference_alignment)">
