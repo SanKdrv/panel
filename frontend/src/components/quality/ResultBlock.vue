@@ -100,8 +100,8 @@
                     {{ s.stage }}
                   </span>
                 </td>
-                <td class="text-end" :class="cls(s.reference_alignment, odz.reference_alignment)">
-                  {{ s.reference_alignment.toFixed(2) }}
+                <td class="text-end" :class="cls(refAlign(s), odz.reference_alignment)">
+                  {{ refAlign(s).toFixed(2) }}
                 </td>
                 <td class="text-end" :class="cls(s.answer_relevance, odz.answer_relevance)">
                   {{ s.answer_relevance.toFixed(2) }}
@@ -195,6 +195,12 @@ const allPass = computed(() => {
     m.value.tps               >= (odz.value.tps               || 0)
   )
 })
+
+function refAlign(s) {
+  // backward-compat: старые samples могли быть с ключом faithfulness
+  const v = s.reference_alignment ?? s.faithfulness
+  return typeof v === 'number' ? v : 0
+}
 
 function cls(v, odzV) {
   return v >= odzV ? 'text-success' : 'text-danger'

@@ -4,8 +4,12 @@
     <div class="fw-bold fs-3 mt-1" :class="colorClass">
       {{ formattedValue }}
     </div>
-    <div v-if="ci && ci.length === 2" class="small text-muted">
-      95% CI: {{ fmtCi(ci[0]) }} – {{ fmtCi(ci[1]) }}
+    <div
+      v-if="ci && ci.length === 2"
+      class="small text-muted"
+      title="95% доверительный интервал (bootstrap, 1000 итераций)"
+    >
+      Дов.Инт.: {{ fmtCi(ci[0]) }} – {{ fmtCi(ci[1]) }}
     </div>
     <div class="small text-muted">ОДЗ: ≥ {{ odz }}{{ unit }}</div>
   </div>

@@ -83,6 +83,31 @@ def _cleanup_old_files() -> None:
         logger.warning("event=quality.history.cleanup_error err=%s", exc)
 
 
+def _migrate_legacy_schema(data: dict) -> dict:
+    """Старые задачи (до переименования) использовали ключ `faithfulness`.
+    Превращаем их «на лету» при загрузке в новый формат `reference_alignment`,
+    чтобы UI отображал их корректно."""
+    result = data.get("result")
+    if isinstance(result, dict):
+        metrics = result.get("metrics")
+        if isinstance(metrics, dict) and "faithfulness" in metrics:
+            metrics["reference_alignment"] = metrics.pop("faithfulness")
+        # ОДЗ тоже могут быть со старым ключом
+        odz = result.get("odz")
+        if isinstance(odz, dict) and "faithfulness" in odz:
+            odz["reference_alignment"] = odz.pop("faithfulness")
+        # Samples внутри result
+        samples = result.get("samples") or []
+        for s in samples:
+            if isinstance(s, dict) and "faithfulness" in s:
+                s["reference_alignment"] = s.pop("faithfulness")
+    # Дубликат samples на верхнем уровне (TaskState.samples)
+    for s in data.get("samples") or []:
+        if isinstance(s, dict) and "faithfulness" in s:
+            s["reference_alignment"] = s.pop("faithfulness")
+    return data
+
+
 def load_recent(limit: int = LOAD_ON_STARTUP) -> list[dict]:
     """Загрузить последние N тасок из файлов. Возвращает список сериализованных
     dict'ов (а не TaskState — десериализация делается в caller)."""
@@ -95,7 +120,8 @@ def load_recent(limit: int = LOAD_ON_STARTUP) -> list[dict]:
         loaded: list[dict] = []
         for f in files:
             try:
-                loaded.append(json.loads(f.read_text(encoding="utf-8")))
+                raw = json.loads(f.read_text(encoding="utf-8"))
+                loaded.append(_migrate_legacy_schema(raw))
             except Exception as exc:
                 logger.warning("event=quality.history.load_one.error file=%s err=%s",
                                f.name, exc)
