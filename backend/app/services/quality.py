@@ -626,14 +626,14 @@ async def _evaluate_one_pair(
             # могла довестись чуть позже. Ждём 30 секунд и заглядываем
             # в /recommendations, ищем НОВУЮ запись (которой не было до /generate).
             recovery_note = (
-                f"poll вернул {poll_status}, ждём 30 с и проверяем "
+                f"poll вернул {poll_status}, ждём 120 с и проверяем "
                 f"список рекомендаций"
             )
             logger.warning(
                 "event=quality.recover.attempt token=%s lead=%s stage=%s reason=%s",
                 token, lead_id, stage, poll_status,
             )
-            await asyncio.sleep(30)
+            await asyncio.sleep(120)
 
         try:
             recs = await _call_with_retry(
@@ -660,7 +660,7 @@ async def _evaluate_one_pair(
             )
             return {**base, "status": "failed",
                     "error": (
-                        f"poll={poll_status}; за 30 с после фейла "
+                        f"poll={poll_status}; за 120 с после фейла "
                         f"новых рекомендаций не появилось"
                     )}
 
@@ -874,6 +874,7 @@ async def _run_evaluation_task(
             "odz": ODZ,
             "lead_ids": lead_ids,
             "samples": samples,
+            "gold_snapshot": gold_entries,
         }
         quality_history.save_task(task)
         return
@@ -891,8 +892,27 @@ async def _run_evaluation_task(
         "started_at": task.started_at,
         "finished_at": task.finished_at,
         "samples": samples,
+        "gold_snapshot": gold_entries,
     }
     quality_history.save_task(task)
+
+
+class EvaluationAlreadyRunningError(RuntimeError):
+    """Бросается, когда пользователь пытается запустить новый прогон,
+    а другой ещё не завершился. Хранит id активной таски."""
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"evaluation task {task_id} already running")
+        self.task_id = task_id
+
+
+def _find_active_task_id() -> str | None:
+    """Возвращает id активной таски, если такая есть, иначе None.
+    Активной считается таска со статусом queued или running."""
+    for t in _tasks.values():
+        if t.status in ("queued", "running"):
+            return t.id
+    return None
 
 
 async def start_evaluation(
@@ -901,16 +921,26 @@ async def start_evaluation(
     lead_ids: list[str],
     stages: list[str] | None = None,
 ) -> str:
-    """Запускает evaluation в background, возвращает task_id."""
-    entries = gold_service.load(settings.quality_gold_dataset_path)
-    entries = gold_service.filter_by_stages(entries, stages)
-    if not entries:
-        raise ValueError("gold dataset is empty (no matching entries)")
-    if not lead_ids:
-        raise ValueError("lead_ids must not be empty")
+    """Запускает evaluation в background, возвращает task_id.
 
-    task_id = uuid.uuid4().hex[:12]
+    Hard lock: если другой прогон уже идёт — кидаем EvaluationAlreadyRunningError
+    с id этой таски, чтобы UI мог показать ссылку и предложить дождаться или
+    отменить. Параллельные прогоны запрещены, чтобы не путать показания
+    Prometheus gauges и не дублировать нагрузку на RAG.
+    """
     async with _tasks_lock:
+        active_id = _find_active_task_id()
+        if active_id:
+            raise EvaluationAlreadyRunningError(active_id)
+
+        entries = gold_service.load(settings.quality_gold_dataset_path)
+        entries = gold_service.filter_by_stages(entries, stages)
+        if not entries:
+            raise ValueError("gold dataset is empty (no matching entries)")
+        if not lead_ids:
+            raise ValueError("lead_ids must not be empty")
+
+        task_id = uuid.uuid4().hex[:12]
         _tasks[task_id] = TaskState(id=task_id)
 
     asyncio.create_task(

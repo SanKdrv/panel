@@ -125,13 +125,23 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const step = Math.max(15, Math.floor(rangeSeconds.value / 120))
+    // ~120 точек на график, шаг ограничен 5..3600с (валидация backend'а)
+    const step = Math.min(3600, Math.max(15, Math.floor(rangeSeconds.value / 120)))
     data.value = await monitoringApi.servers(rangeSeconds.value, step)
   } catch (e) {
-    error.value = e?.response?.data?.detail || e?.message || 'Ошибка'
+    error.value = formatError(e)
   } finally {
     loading.value = false
   }
+}
+
+function formatError(e) {
+  const detail = e?.response?.data?.detail
+  if (Array.isArray(detail)) {
+    // FastAPI validation error: list of {loc, msg, type}
+    return detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+  }
+  return detail || e?.message || 'Ошибка'
 }
 
 watch(rangeSeconds, () => load())

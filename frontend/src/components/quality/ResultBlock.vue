@@ -43,7 +43,7 @@
         ·
         <span
           class="text-warning"
-          title="poll вернул fail, но после паузы 30 с в RAG нашлась новая рекомендация"
+          title="poll вернул fail, но после паузы 120 с в RAG нашлась новая рекомендация"
         >
           восстановлено: {{ m.samples_recovered }}
         </span>
@@ -52,6 +52,46 @@
         · <span class="text-danger">failed: {{ m.samples_failed }}</span>
       </span>
       <span v-if="m.samples_total"> из {{ m.samples_total }}</span>
+    </div>
+
+    <!-- Gold dataset snapshot: эталоны, использовавшиеся в этом прогоне.
+         Поле gold_snapshot есть только у новых тасок — у старых history-задач
+         его нет, и блок просто не показывается (backward-compat). -->
+    <div v-if="goldSnapshot.length" class="card border-0 shadow-sm mb-3">
+      <div class="card-body p-0">
+        <div
+          class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom"
+          style="cursor: pointer"
+          @click="goldOpen = !goldOpen"
+        >
+          <span class="fw-semibold small">
+            <i class="bi bi-book me-1"></i>
+            Эталоны прогона ({{ goldSnapshot.length }})
+          </span>
+          <i class="bi" :class="goldOpen ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+        </div>
+        <table v-if="goldOpen" class="table mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width: 140px">Стадия</th>
+              <th>Эталонный ответ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(g, gi) in goldSnapshot" :key="gi">
+              <td>
+                <span class="badge rounded-pill px-2" :class="badge(g.stage)">
+                  {{ g.stage }}
+                </span>
+                <div v-if="g.id" class="text-muted small mt-1">{{ g.id }}</div>
+              </td>
+              <td class="small" style="white-space: pre-wrap">
+                {{ g.reference }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="alert d-flex align-items-center gap-2" :class="allPass ? 'alert-success' : 'alert-warning'">
@@ -196,6 +236,10 @@ const props = defineProps({
 const m = computed(() => props.result.metrics)
 const odz = computed(() => props.result.odz || {})
 const samples = computed(() => props.result.samples || [])
+// gold_snapshot есть только у новых тасок; старые без поля → пустой массив,
+// раскрывающийся блок просто не показывается (backward-compat).
+const goldSnapshot = computed(() => props.result.gold_snapshot || [])
+const goldOpen = ref(false)
 
 const opened = ref({})
 function toggle(i) {

@@ -304,7 +304,18 @@ async function startEvaluation() {
     task.value = { id: data.task_id, status: 'queued', done: 0, total: 0 }
     startPolling()
   } catch (e) {
-    error.value = e?.response?.data?.detail || e?.message
+    // 409: уже идёт другой прогон — подхватим его и покажем
+    const detail = e?.response?.data?.detail
+    if (e?.response?.status === 409 && detail?.active_task_id) {
+      const activeId = detail.active_task_id
+      localStorage.setItem(ACTIVE_TASK_KEY, activeId)
+      step.value = 'run'
+      task.value = { id: activeId, status: 'running', done: 0, total: 0 }
+      error.value = detail.message || 'Уже идёт другой прогон, подключились к нему.'
+      startPolling()
+      return
+    }
+    error.value = (typeof detail === 'string' && detail) || detail?.message || e?.message
   }
 }
 

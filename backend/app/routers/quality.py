@@ -171,6 +171,20 @@ async def start_eval(
         task_id = await quality_service.start_evaluation(
             rag, settings, body.lead_ids, body.stages,
         )
+    except quality_service.EvaluationAlreadyRunningError as exc:
+        # 409 Conflict — параллельный прогон запрещён. Возвращаем id
+        # активной таски, чтобы UI мог показать ссылку «Перейти к прогону».
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "already_running",
+                "active_task_id": exc.task_id,
+                "message": (
+                    f"Другой прогон уже выполняется (task {exc.task_id}). "
+                    f"Дождитесь его завершения или остановите."
+                ),
+            },
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"task_id": task_id, "status": "queued"}

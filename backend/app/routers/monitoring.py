@@ -61,7 +61,7 @@ def _series_to_points(result: list[dict]) -> list[dict]:
 @router.get("/servers")
 async def servers_resources(
     range_seconds: int = Query(3600, ge=60, le=86400, alias="range"),
-    step_seconds: int = Query(30, ge=5, le=600, alias="step"),
+    step_seconds: int = Query(30, ge=5, le=3600, alias="step"),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """CPU/RAM/Disk по всем серверам за последние range секунд."""
