@@ -109,7 +109,8 @@
         </button>
         <button
           class="btn btn-primary"
-          :disabled="!selectedLeads.length"
+          :disabled="!selectedLeads.length || regenRunning"
+          :title="regenRunning ? 'Дождитесь окончания перегенерации' : ''"
           @click="startEvaluation"
         >
           <i class="bi bi-play-fill me-2"></i>
@@ -155,6 +156,8 @@
         :result="task.result"
         :task-id="task?.id"
         @regen-complete="onRegenComplete"
+        @regen-start="regenRunning = true"
+        @regen-end="regenRunning = false"
       />
 
       <div v-if="['completed', 'failed', 'cancelled'].includes(task?.status)" class="mt-3">
@@ -203,6 +206,7 @@ const searchProgressPercent = computed(() => {
 const task = ref(null)
 const goldCount = ref(4)
 const cancelling = ref(false)
+const regenRunning = ref(false)
 let pollTimer = null
 
 const selectedLeads = computed(() =>
@@ -411,5 +415,11 @@ onMounted(async () => {
   } catch (e) {
     /* ничего, остаёмся на форме */
   }
+
+  // 3) Проверяем, не идёт ли прямо сейчас перегенерация (другой браузер / возврат)
+  try {
+    const regen = await qualityApi.getActiveRegen()
+    if (regen.status === 'running') regenRunning.value = true
+  } catch (_e) { /* ignore */ }
 })
 </script>

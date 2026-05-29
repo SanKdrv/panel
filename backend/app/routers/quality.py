@@ -252,6 +252,22 @@ class RegenRequest(BaseModel):
     pairs: list[dict]  # [{"lead_id": str, "stage": str}]
 
 
+class CancelPairsRequest(BaseModel):
+    pairs: list[dict]  # [{"lead_id": str, "stage": str}]
+
+
+def _regen_progress(state) -> list[dict]:
+    return [
+        {
+            "lead_id": p.lead_id,
+            "stage": p.stage,
+            "status": p.status,
+            "sample": p.sample,
+        }
+        for p in state.progress
+    ]
+
+
 @router.post("/regenerate")
 async def start_regen(
     body: RegenRequest,
@@ -263,8 +279,24 @@ async def start_regen(
             rag, settings, body.task_id, body.pairs,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        status_code = 409 if "already running" in str(exc) else 404
+        raise HTTPException(status_code=status_code, detail=str(exc))
     return {"regen_id": regen_id, "status": "running"}
+
+
+# ВАЖНО: /regenerate/active должен быть до /regenerate/{regen_id}
+@router.get("/regenerate/active")
+async def get_active_regen() -> dict:
+    """Возвращает текущую активную регенерацию (если есть) — для любого клиента."""
+    state = quality_service.get_active_regen()
+    if not state:
+        return {"status": "none"}
+    return {
+        "status": "running",
+        "regen_id": state.id,
+        "task_id": state.task_id,
+        "progress": _regen_progress(state),
+    }
 
 
 @router.get("/regenerate/{regen_id}")
@@ -277,13 +309,16 @@ async def get_regen_status(regen_id: str) -> dict:
         "task_id": state.task_id,
         "status": state.status,
         "error": state.error,
-        "progress": [
-            {
-                "lead_id": p.lead_id,
-                "stage": p.stage,
-                "status": p.status,
-                "sample": p.sample,
-            }
-            for p in state.progress
-        ],
+        "progress": _regen_progress(state),
     }
+
+
+@router.post("/regenerate/{regen_id}/cancel-pairs")
+async def cancel_regen_pairs(regen_id: str, body: CancelPairsRequest) -> dict:
+    ok = quality_service.cancel_regen_pairs(regen_id, body.pairs)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="regen not running or no queued pairs to cancel",
+        )
+    return {"status": "ok"}

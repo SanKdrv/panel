@@ -83,8 +83,12 @@ export const qualityApi = {
   latest: () => api.get('/quality/latest').then((r) => r.data),
   startRegen: (taskId, pairs) =>
     api.post('/quality/regenerate', { task_id: taskId, pairs }).then((r) => r.data),
+  getActiveRegen: () =>
+    api.get('/quality/regenerate/active').then((r) => r.data),
   getRegenStatus: (regenId) =>
     api.get(`/quality/regenerate/${regenId}`).then((r) => r.data),
+  cancelRegenPairs: (regenId, pairs) =>
+    api.post(`/quality/regenerate/${regenId}/cancel-pairs`, { pairs }).then((r) => r.data),
   history: (rangeSeconds = 86400, stepSeconds = 300) =>
     api
       .get('/monitoring/quality/history', {

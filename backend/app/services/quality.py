@@ -399,7 +399,8 @@ def _reset_for_tests() -> None:
 class RegenPairProgress:
     lead_id: str
     stage: str
-    status: str = "queued"      # queued | processing | done | failed
+    status: str = "queued"      # queued | processing | done | failed | cancelled
+    cancelled: bool = False
     sample: dict | None = None
 
 
@@ -413,10 +414,29 @@ class RegenState:
 
 
 _regen_tasks: dict[str, RegenState] = {}
+_active_regen: RegenState | None = None   # глобально видимая активная регенерация
 
 
 def get_regen_state(regen_id: str) -> RegenState | None:
     return _regen_tasks.get(regen_id)
+
+
+def get_active_regen() -> RegenState | None:
+    return _active_regen
+
+
+def cancel_regen_pairs(regen_id: str, pairs: list[dict]) -> bool:
+    """Отменяет ещё не начавшиеся пары (status='queued').
+    Возвращает False если регенерация не найдена или уже завершена."""
+    state = _regen_tasks.get(regen_id)
+    if not state or state.status != "running":
+        return False
+    pair_keys = {(str(p["lead_id"]), str(p["stage"])) for p in pairs}
+    for pp in state.progress:
+        if (pp.lead_id, pp.stage) in pair_keys and pp.status == "queued":
+            pp.cancelled = True
+            pp.status = "cancelled"
+    return True
 
 
 async def start_regeneration(
@@ -434,6 +454,10 @@ async def start_regeneration(
     if not pairs:
         raise ValueError("pairs list must not be empty")
 
+    global _active_regen
+    if _active_regen is not None:
+        raise ValueError("regeneration already running")
+
     regen_id = uuid.uuid4().hex[:12]
     progress = [
         RegenPairProgress(lead_id=str(p["lead_id"]), stage=str(p["stage"]))
@@ -441,6 +465,7 @@ async def start_regeneration(
     ]
     state = RegenState(id=regen_id, task_id=task_id, progress=progress)
     _regen_tasks[regen_id] = state
+    _active_regen = state
 
     asyncio.create_task(_run_regeneration(regen_id, rag, settings))
     return regen_id
@@ -451,6 +476,7 @@ async def _run_regeneration(
     rag: RAGClient,
     settings: Settings,
 ) -> None:
+    global _active_regen
     state = _regen_tasks[regen_id]
     task = _tasks.get(state.task_id)
 
@@ -462,11 +488,14 @@ async def _run_regeneration(
         else:
             gold_list = gold_service.load(settings.quality_gold_dataset_path)
 
-        # Build stage → gold_entry map (last entry wins if duplicate stages)
         entries_by_stage: dict[str, dict] = {e["stage"]: e for e in gold_list}
 
         async with httpx.AsyncClient() as judge_client:
             for pair_progress in state.progress:
+                # Пара могла быть отменена пока стояла в очереди
+                if pair_progress.cancelled:
+                    continue
+
                 pair_progress.status = "processing"
                 lead_id = pair_progress.lead_id
                 stage = pair_progress.stage
@@ -499,9 +528,12 @@ async def _run_regeneration(
                         "error": _fmt_exc(exc),
                     }
 
-        # Merge new samples into the original task and recalculate metrics
+        # Merge non-cancelled samples into the original task and recalculate metrics
         if task is not None:
-            new_samples = [p.sample for p in state.progress if p.sample]
+            new_samples = [
+                p.sample for p in state.progress
+                if p.sample is not None and not p.cancelled
+            ]
             new_map: dict[tuple[str, str], dict] = {
                 (s["lead_id"], s["stage"]): s for s in new_samples
             }
@@ -513,7 +545,6 @@ async def _run_regeneration(
                     updated.append(new_map.pop(key))
                 else:
                     updated.append(s)
-            # Pairs that weren't in original samples → append
             updated.extend(new_map.values())
 
             task.samples = updated
@@ -530,6 +561,8 @@ async def _run_regeneration(
         logger.exception("event=quality.regen.error regen_id=%s", regen_id)
         state.status = "failed"
         state.error = _fmt_exc(exc)
+    finally:
+        _active_regen = None
 
 
 # ---------- find leads ----------

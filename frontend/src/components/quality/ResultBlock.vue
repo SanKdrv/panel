@@ -244,6 +244,13 @@
                     <span v-if="regenProgress[regenKey(s)] === 'processing'" class="spinner-border spinner-border-sm" style="width:.65em;height:.65em"></span>
                     <span v-else>{{ regenProgress[regenKey(s)] }}</span>
                   </span>
+                  <button
+                    v-if="regenProgress[regenKey(s)] === 'queued'"
+                    class="btn btn-sm p-0 ms-1 text-danger"
+                    style="line-height:1"
+                    title="Отменить"
+                    @click.stop="cancelPair(s.lead_id, s.stage)"
+                  ><i class="bi bi-x-lg" style="font-size:0.7rem"></i></button>
                 </td>
                 <td colspan="4" class="text-danger small">
                   <i class="bi bi-x-circle-fill me-1"></i>
@@ -281,6 +288,13 @@
                     <span v-if="regenProgress[regenKey(s)] === 'processing'" class="spinner-border spinner-border-sm" style="width:.65em;height:.65em"></span>
                     <span v-else>{{ regenProgress[regenKey(s)] }}</span>
                   </span>
+                  <button
+                    v-if="regenProgress[regenKey(s)] === 'queued'"
+                    class="btn btn-sm p-0 ms-1 text-danger"
+                    style="line-height:1"
+                    title="Отменить"
+                    @click.stop="cancelPair(s.lead_id, s.stage)"
+                  ><i class="bi bi-x-lg" style="font-size:0.7rem"></i></button>
                 </td>
                 <td class="text-end" :class="cls(refAlign(s), odz.reference_alignment)">
                   {{ refAlign(s).toFixed(2) }}
@@ -356,14 +370,12 @@ import { ref, computed, reactive, onMounted } from 'vue'
 import MetricCard from '../MetricCard.vue'
 import { qualityApi } from '../../api/endpoints'
 
-const REGEN_KEY = 'quality_active_regen' // { regen_id, task_id }
-
 const props = defineProps({
   result: { type: Object, required: true },
   taskId: { type: String, default: null },
 })
 
-const emit = defineEmits(['regen-complete'])
+const emit = defineEmits(['regen-complete', 'regen-start', 'regen-end'])
 
 const m = computed(() => props.result.metrics)
 const odz = computed(() => props.result.odz || {})
@@ -450,11 +462,10 @@ function regenKey(s) {
   return `${s.lead_id}:${s.stage}`
 }
 
-// selectedForRegen: reactive map of regenKey → boolean
-const selectedForRegen = reactive({})
+const selectedForRegen = reactive({})  // regenKey → boolean
 const isRegening = ref(false)
-// regenProgress: reactive map of regenKey → status string ('queued'|'processing'|'done'|'failed')
-const regenProgress = reactive({})
+const regenProgress = reactive({})     // regenKey → 'queued'|'processing'|'done'|'failed'|'cancelled'
+const activeRegenId = ref(null)        // regen_id текущей активной регенерации
 
 function toggleRegen(s) {
   const k = regenKey(s)
@@ -493,22 +504,31 @@ async function startRegen() {
   if (!pairs.length) return
 
   isRegening.value = true
-
-  // Initialise progress display for selected pairs
+  emit('regen-start')
   pairs.forEach((p) => {
     regenProgress[`${p.lead_id}:${p.stage}`] = 'queued'
   })
 
   try {
     const data = await qualityApi.startRegen(props.taskId, pairs)
-    localStorage.setItem(REGEN_KEY, JSON.stringify({ regen_id: data.regen_id, task_id: props.taskId }))
+    activeRegenId.value = data.regen_id
     await pollRegen(data.regen_id)
   } catch (e) {
     console.error('Regen start failed:', e)
   } finally {
     isRegening.value = false
-    localStorage.removeItem(REGEN_KEY)
+    activeRegenId.value = null
+    emit('regen-end')
   }
+}
+
+async function cancelPair(leadId, stage) {
+  if (!activeRegenId.value) return
+  try {
+    await qualityApi.cancelRegenPairs(activeRegenId.value, [{ lead_id: leadId, stage }])
+    regenProgress[`${leadId}:${stage}`] = 'cancelled'
+    selectedForRegen[`${leadId}:${stage}`] = false
+  } catch (_e) { /* ignore */ }
 }
 
 function pollRegen(regenId) {
@@ -516,58 +536,42 @@ function pollRegen(regenId) {
     const timer = setInterval(async () => {
       try {
         const data = await qualityApi.getRegenStatus(regenId)
-
-        // Update per-row badges
         for (const p of data.progress) {
           regenProgress[`${p.lead_id}:${p.stage}`] = p.status
         }
-
         if (data.status !== 'running') {
           clearInterval(timer)
-          // Clear selections
-          Object.keys(selectedForRegen).forEach((k) => {
-            selectedForRegen[k] = false
-          })
-          if (data.status === 'completed') {
-            emit('regen-complete')
-          }
+          Object.keys(selectedForRegen).forEach((k) => { selectedForRegen[k] = false })
+          if (data.status === 'completed') emit('regen-complete')
           resolve()
         }
-      } catch (_e) {
-        // keep polling on network errors
-      }
+      } catch (_e) { /* keep polling */ }
     }, 2000)
   })
 }
 
+// При монтировании спрашиваем бэкенд: вдруг уже идёт регенерация для этой таски?
+// Это работает и для возврата на страницу, и для другого браузера.
 onMounted(async () => {
-  const stored = localStorage.getItem(REGEN_KEY)
-  if (!stored || !props.taskId) return
+  if (!props.taskId) return
   try {
-    const { regen_id, task_id } = JSON.parse(stored)
-    if (task_id !== props.taskId) return   // чужая регенерация — не трогаем
+    const data = await qualityApi.getActiveRegen()
+    if (data.status !== 'running' || data.task_id !== props.taskId) return
 
-    // Проверяем статус на сервере
-    const data = await qualityApi.getRegenStatus(regen_id)
-    if (data.status !== 'running') {
-      localStorage.removeItem(REGEN_KEY)
-      return
-    }
-
-    // Регенерация ещё идёт — восстанавливаем UI и подключаемся к polling
     isRegening.value = true
+    activeRegenId.value = data.regen_id
+    emit('regen-start')
     for (const p of data.progress) {
       regenProgress[`${p.lead_id}:${p.stage}`] = p.status
     }
     try {
-      await pollRegen(regen_id)
+      await pollRegen(data.regen_id)
     } finally {
       isRegening.value = false
-      localStorage.removeItem(REGEN_KEY)
+      activeRegenId.value = null
+      emit('regen-end')
     }
-  } catch (_e) {
-    localStorage.removeItem(REGEN_KEY)
-  }
+  } catch (_e) { /* ignore */ }
 })
 
 function regenBadgeClass(s) {
@@ -575,6 +579,7 @@ function regenBadgeClass(s) {
   if (st === 'processing') return 'bg-warning text-dark'
   if (st === 'done') return 'bg-success'
   if (st === 'failed') return 'bg-danger'
+  if (st === 'cancelled') return 'bg-secondary'
   return 'bg-secondary'
 }
 </script>
