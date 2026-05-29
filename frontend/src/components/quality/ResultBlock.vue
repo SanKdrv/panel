@@ -352,9 +352,11 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, onMounted } from 'vue'
 import MetricCard from '../MetricCard.vue'
 import { qualityApi } from '../../api/endpoints'
+
+const REGEN_KEY = 'quality_active_regen' // { regen_id, task_id }
 
 const props = defineProps({
   result: { type: Object, required: true },
@@ -499,11 +501,13 @@ async function startRegen() {
 
   try {
     const data = await qualityApi.startRegen(props.taskId, pairs)
+    localStorage.setItem(REGEN_KEY, JSON.stringify({ regen_id: data.regen_id, task_id: props.taskId }))
     await pollRegen(data.regen_id)
   } catch (e) {
     console.error('Regen start failed:', e)
   } finally {
     isRegening.value = false
+    localStorage.removeItem(REGEN_KEY)
   }
 }
 
@@ -535,6 +539,36 @@ function pollRegen(regenId) {
     }, 2000)
   })
 }
+
+onMounted(async () => {
+  const stored = localStorage.getItem(REGEN_KEY)
+  if (!stored || !props.taskId) return
+  try {
+    const { regen_id, task_id } = JSON.parse(stored)
+    if (task_id !== props.taskId) return   // чужая регенерация — не трогаем
+
+    // Проверяем статус на сервере
+    const data = await qualityApi.getRegenStatus(regen_id)
+    if (data.status !== 'running') {
+      localStorage.removeItem(REGEN_KEY)
+      return
+    }
+
+    // Регенерация ещё идёт — восстанавливаем UI и подключаемся к polling
+    isRegening.value = true
+    for (const p of data.progress) {
+      regenProgress[`${p.lead_id}:${p.stage}`] = p.status
+    }
+    try {
+      await pollRegen(regen_id)
+    } finally {
+      isRegening.value = false
+      localStorage.removeItem(REGEN_KEY)
+    }
+  } catch (_e) {
+    localStorage.removeItem(REGEN_KEY)
+  }
+})
 
 function regenBadgeClass(s) {
   const st = regenProgress[regenKey(s)]
