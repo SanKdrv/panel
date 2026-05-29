@@ -75,7 +75,12 @@
           Запущен: {{ fmt(openedTask.started_at) }} ·
           Завершён: {{ fmt(openedTask.finished_at) }}
         </div>
-        <ResultBlock v-if="openedTask.result" :result="openedTask.result" />
+        <ResultBlock
+          v-if="openedTask.result"
+          :result="openedTask.result"
+          :task-id="openedTask.id"
+          @regen-complete="onRegenComplete"
+        />
         <div v-else class="text-muted">Результата нет (вероятно был fail на старте).</div>
       </div>
     </div>
@@ -105,6 +110,19 @@ async function open(t) {
     openedTask.value = await qualityApi.taskStatus(t.id)
   } catch (e) {
     openedTask.value = t
+  }
+}
+
+async function onRegenComplete() {
+  if (!openedTask.value?.id) return
+  try {
+    const fresh = await qualityApi.taskStatus(openedTask.value.id)
+    openedTask.value = fresh
+    // Обновим строку в таблице тоже
+    const idx = tasks.value.findIndex((t) => t.id === fresh.id)
+    if (idx !== -1) tasks.value[idx] = fresh
+  } catch (_e) {
+    /* ignore */
   }
 }
 

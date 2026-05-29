@@ -1,7 +1,7 @@
 """Lead card: recommendations, actions timeline, tasks."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..security import get_current_user
 from ..services.rag_client import RAGClient
@@ -12,6 +12,27 @@ router = APIRouter(
     tags=["leads"],
     dependencies=[Depends(get_current_user)],
 )
+
+
+@router.get("/by-email")
+async def lead_by_email(
+    email: str = Query(..., description="Email-адрес контакта в Mautic"),
+    rag: RAGClient = Depends(get_rag_client),
+) -> dict:
+    """Resolve lead_id from email via Mautic contact check."""
+    result = await rag.check_mautic_contact(email)
+    if result.get("unique") is False:
+        raise HTTPException(
+            status_code=409,
+            detail="Найдено несколько контактов с таким email",
+        )
+    contact_id = result.get("contact_id")
+    if not contact_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Контакт с таким email не найден",
+        )
+    return {"lead_id": str(contact_id), "email": email}
 
 
 @router.get("/{lead_id}")

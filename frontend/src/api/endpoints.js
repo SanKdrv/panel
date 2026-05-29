@@ -39,6 +39,8 @@ export const generateApi = {
 
 export const leadsApi = {
   card: (leadId) => api.get(`/leads/${leadId}`).then((r) => r.data),
+  byEmail: (email) =>
+    api.get('/leads/by-email', { params: { email } }).then((r) => r.data),
 }
 
 export const qualityApi = {
@@ -79,6 +81,10 @@ export const qualityApi = {
     api.get('/quality/tasks', { params: { limit } }).then((r) => r.data),
 
   latest: () => api.get('/quality/latest').then((r) => r.data),
+  startRegen: (taskId, pairs) =>
+    api.post('/quality/regenerate', { task_id: taskId, pairs }).then((r) => r.data),
+  getRegenStatus: (regenId) =>
+    api.get(`/quality/regenerate/${regenId}`).then((r) => r.data),
   history: (rangeSeconds = 86400, stepSeconds = 300) =>
     api
       .get('/monitoring/quality/history', {

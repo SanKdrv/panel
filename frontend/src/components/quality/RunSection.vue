@@ -150,7 +150,12 @@
         </button>
       </div>
 
-      <ResultBlock v-if="task?.result?.metrics" :result="task.result" />
+      <ResultBlock
+        v-if="task?.result?.metrics"
+        :result="task.result"
+        :task-id="task?.id"
+        @regen-complete="onRegenComplete"
+      />
 
       <div v-if="['completed', 'failed', 'cancelled'].includes(task?.status)" class="mt-3">
         <button class="btn btn-outline-secondary" @click="restart">
@@ -342,6 +347,16 @@ function startPolling() {
       }
     }
   }, 2000)
+}
+
+async function onRegenComplete() {
+  if (!task.value?.id) return
+  try {
+    const data = await qualityApi.taskStatus(task.value.id)
+    task.value = data
+  } catch (_e) {
+    /* ignore — stale view is acceptable */
+  }
 }
 
 async function cancelTask() {

@@ -54,9 +54,7 @@
       <span v-if="m.samples_total"> из {{ m.samples_total }}</span>
     </div>
 
-    <!-- Gold dataset snapshot: эталоны, использовавшиеся в этом прогоне.
-         Поле gold_snapshot есть только у новых тасок — у старых history-задач
-         его нет, и блок просто не показывается (backward-compat). -->
+    <!-- Gold dataset snapshot -->
     <div v-if="goldSnapshot.length" class="card border-0 shadow-sm mb-3">
       <div class="card-body p-0">
         <div
@@ -109,27 +107,142 @@
 
     <!-- Detail per sample -->
     <div v-if="samples.length" class="card border-0 shadow-sm mt-3">
+      <!-- Filter panel -->
+      <div class="px-3 py-2 border-bottom bg-light">
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+          <span class="fw-semibold small">
+            <i class="bi bi-funnel me-1"></i>Фильтры
+          </span>
+          <div class="form-check form-check-inline mb-0">
+            <input
+              id="filterOdz"
+              v-model="filterOnlyFailed"
+              class="form-check-input"
+              type="checkbox"
+            />
+            <label for="filterOdz" class="form-check-label small">
+              Только вне ОДЗ
+            </label>
+          </div>
+          <button
+            class="btn btn-sm btn-link p-0 text-decoration-none small"
+            @click="showAdvanced = !showAdvanced"
+          >
+            {{ showAdvanced ? 'Скрыть пороги ▲' : 'Пороги по метрикам ▼' }}
+          </button>
+
+          <!-- Regen button (ФТ15) — shown only when rows are selected and taskId provided -->
+          <button
+            v-if="taskId && selectedCount > 0"
+            class="btn btn-sm btn-warning"
+            :disabled="isRegening"
+            @click="startRegen"
+          >
+            <span v-if="isRegening">
+              <span class="spinner-border spinner-border-sm me-1"></span>Перегенерация...
+            </span>
+            <span v-else>
+              <i class="bi bi-arrow-repeat me-1"></i>Перегенерировать ({{ selectedCount }})
+            </span>
+          </button>
+
+          <span class="ms-auto small text-muted">
+            Показано: {{ filteredSamples.length }} / {{ samples.length }}
+          </span>
+        </div>
+
+        <div v-if="showAdvanced" class="row g-2 mt-2">
+          <div
+            v-for="mf in metricFilters"
+            :key="mf.key"
+            class="col-6 col-md-3"
+          >
+            <label class="form-label small text-muted mb-1">
+              {{ mf.label }}
+              <span class="text-secondary">(ОДЗ ≥ {{ odzVal(mf.key).toFixed(2) }})</span>
+            </label>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text" style="font-size: 0.75rem">min</span>
+              <input
+                v-model.number="mf.min"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                class="form-control"
+                style="font-size: 0.75rem"
+              />
+              <span class="input-group-text" style="font-size: 0.75rem">max</span>
+              <input
+                v-model.number="mf.max"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                class="form-control"
+                style="font-size: 0.75rem"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card-body p-0">
         <table class="table mb-0">
           <thead class="table-light">
             <tr>
+              <!-- Checkbox "select all" (ФТ15) — only shown when taskId provided -->
+              <th v-if="taskId" style="width: 36px" class="text-center">
+                <input
+                  type="checkbox"
+                  class="form-check-input"
+                  :checked="allSelected"
+                  :indeterminate.prop="someSelected"
+                  @change="toggleSelectAll"
+                />
+              </th>
               <th style="width: 100px">Лид</th>
               <th style="width: 100px">Стадия</th>
-              <th class="text-end" style="width: 90px">Faith</th>
-              <th class="text-end" style="width: 90px">Rel</th>
-              <th class="text-end" style="width: 90px">Prec</th>
-              <th class="text-end" style="width: 90px">TPS</th>
+              <th class="text-end" style="width: 90px">
+                Faith
+                <span class="text-secondary" style="font-size:0.7rem">≥{{ odzVal('reference_alignment').toFixed(2) }}</span>
+              </th>
+              <th class="text-end" style="width: 90px">
+                Rel
+                <span class="text-secondary" style="font-size:0.7rem">≥{{ odzVal('answer_relevance').toFixed(2) }}</span>
+              </th>
+              <th class="text-end" style="width: 90px">
+                Prec
+                <span class="text-secondary" style="font-size:0.7rem">≥{{ odzVal('context_precision').toFixed(2) }}</span>
+              </th>
+              <th class="text-end" style="width: 90px">
+                TPS
+                <span class="text-secondary" style="font-size:0.7rem">≥{{ odzVal('tps').toFixed(1) }}</span>
+              </th>
               <th style="width: 40px"></th>
             </tr>
           </thead>
           <tbody>
-            <template v-for="(s, i) in samples" :key="i">
+            <template v-for="(s, i) in filteredSamples" :key="i">
               <!-- Failed sample row -->
               <tr v-if="s.status === 'failed'" style="cursor: pointer" @click="toggle(i)" class="table-danger">
+                <td v-if="taskId" class="text-center" @click.stop>
+                  <input
+                    type="checkbox"
+                    class="form-check-input"
+                    :checked="!!selectedForRegen[regenKey(s)]"
+                    :disabled="isRegening"
+                    @change="toggleRegen(s)"
+                  />
+                </td>
                 <td>#{{ s.lead_id }}</td>
                 <td>
                   <span class="badge rounded-pill px-2" :class="badge(s.stage)">
                     {{ s.stage }}
+                  </span>
+                  <span v-if="regenProgress[regenKey(s)]" :class="regenBadgeClass(s)" class="badge rounded-pill px-2 ms-1">
+                    <span v-if="regenProgress[regenKey(s)] === 'processing'" class="spinner-border spinner-border-sm" style="width:.65em;height:.65em"></span>
+                    <span v-else>{{ regenProgress[regenKey(s)] }}</span>
                   </span>
                 </td>
                 <td colspan="4" class="text-danger small">
@@ -143,6 +256,15 @@
 
               <!-- OK sample row -->
               <tr v-else style="cursor: pointer" @click="toggle(i)">
+                <td v-if="taskId" class="text-center" @click.stop>
+                  <input
+                    type="checkbox"
+                    class="form-check-input"
+                    :checked="!!selectedForRegen[regenKey(s)]"
+                    :disabled="isRegening"
+                    @change="toggleRegen(s)"
+                  />
+                </td>
                 <td>#{{ s.lead_id }}</td>
                 <td>
                   <span class="badge rounded-pill px-2" :class="badge(s.stage)">
@@ -154,6 +276,10 @@
                     title="восстановлен: poll сказал fail, но рекомендация всё-таки появилась"
                   >
                     восст.
+                  </span>
+                  <span v-if="regenProgress[regenKey(s)]" :class="regenBadgeClass(s)" class="badge rounded-pill px-2 ms-1">
+                    <span v-if="regenProgress[regenKey(s)] === 'processing'" class="spinner-border spinner-border-sm" style="width:.65em;height:.65em"></span>
+                    <span v-else>{{ regenProgress[regenKey(s)] }}</span>
                   </span>
                 </td>
                 <td class="text-end" :class="cls(refAlign(s), odz.reference_alignment)">
@@ -175,7 +301,7 @@
 
               <!-- Expanded -->
               <tr v-if="opened[i]">
-                <td colspan="7" class="bg-light">
+                <td :colspan="taskId ? 8 : 7" class="bg-light">
                   <div v-if="s.status === 'failed'" class="p-2">
                     <div class="small fw-semibold text-muted mb-1">Причина</div>
                     <div class="small text-danger">{{ s.error }}</div>
@@ -226,20 +352,62 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import MetricCard from '../MetricCard.vue'
+import { qualityApi } from '../../api/endpoints'
 
 const props = defineProps({
   result: { type: Object, required: true },
+  taskId: { type: String, default: null },
 })
+
+const emit = defineEmits(['regen-complete'])
 
 const m = computed(() => props.result.metrics)
 const odz = computed(() => props.result.odz || {})
 const samples = computed(() => props.result.samples || [])
-// gold_snapshot есть только у новых тасок; старые без поля → пустой массив,
-// раскрывающийся блок просто не показывается (backward-compat).
 const goldSnapshot = computed(() => props.result.gold_snapshot || [])
 const goldOpen = ref(false)
+
+// ---- Filters (ФТ16) ----
+const filterOnlyFailed = ref(false)
+const showAdvanced = ref(false)
+
+const metricFilters = reactive([
+  { key: 'reference_alignment', label: 'Faith', min: null, max: null },
+  { key: 'answer_relevance',    label: 'Rel',   min: null, max: null },
+  { key: 'context_precision',   label: 'Prec',  min: null, max: null },
+  { key: 'tps',                 label: 'TPS',   min: null, max: null },
+])
+
+function odzVal(key) {
+  return odz.value[key] ?? 0
+}
+
+function sampleMetric(s, key) {
+  if (key === 'reference_alignment') return refAlign(s)
+  return s[key] ?? 0
+}
+
+function isOutOfOdz(s) {
+  if (s.status === 'failed') return true
+  return metricFilters.some(
+    (mf) => sampleMetric(s, mf.key) < odzVal(mf.key),
+  )
+}
+
+const filteredSamples = computed(() => {
+  return samples.value.filter((s) => {
+    if (filterOnlyFailed.value && !isOutOfOdz(s)) return false
+    for (const mf of metricFilters) {
+      const v = sampleMetric(s, mf.key)
+      if (mf.min !== null && mf.min !== '' && v < mf.min) return false
+      if (mf.max !== null && mf.max !== '' && v > mf.max) return false
+    }
+    return true
+  })
+})
+// ---- end Filters ----
 
 const opened = ref({})
 function toggle(i) {
@@ -257,7 +425,6 @@ const allPass = computed(() => {
 })
 
 function refAlign(s) {
-  // backward-compat: старые samples могли быть с ключом faithfulness
   const v = s.reference_alignment ?? s.faithfulness
   return typeof v === 'number' ? v : 0
 }
@@ -273,5 +440,107 @@ function badge(s) {
     hot: 'bg-danger',
     after_sale: 'bg-success',
   }[s]
+}
+
+// ---- Selective regeneration (ФТ15) ----
+
+function regenKey(s) {
+  return `${s.lead_id}:${s.stage}`
+}
+
+// selectedForRegen: reactive map of regenKey → boolean
+const selectedForRegen = reactive({})
+const isRegening = ref(false)
+// regenProgress: reactive map of regenKey → status string ('queued'|'processing'|'done'|'failed')
+const regenProgress = reactive({})
+
+function toggleRegen(s) {
+  const k = regenKey(s)
+  selectedForRegen[k] = !selectedForRegen[k]
+}
+
+const selectedCount = computed(() =>
+  Object.values(selectedForRegen).filter(Boolean).length,
+)
+
+const allSelected = computed(() => {
+  if (!filteredSamples.value.length) return false
+  return filteredSamples.value.every((s) => !!selectedForRegen[regenKey(s)])
+})
+
+const someSelected = computed(() => {
+  if (allSelected.value) return false
+  return filteredSamples.value.some((s) => !!selectedForRegen[regenKey(s)])
+})
+
+function toggleSelectAll(e) {
+  const v = e.target.checked
+  filteredSamples.value.forEach((s) => {
+    selectedForRegen[regenKey(s)] = v
+  })
+}
+
+async function startRegen() {
+  if (!props.taskId) return
+  const pairs = Object.entries(selectedForRegen)
+    .filter(([, v]) => v)
+    .map(([k]) => {
+      const idx = k.indexOf(':')
+      return { lead_id: k.slice(0, idx), stage: k.slice(idx + 1) }
+    })
+  if (!pairs.length) return
+
+  isRegening.value = true
+
+  // Initialise progress display for selected pairs
+  pairs.forEach((p) => {
+    regenProgress[`${p.lead_id}:${p.stage}`] = 'queued'
+  })
+
+  try {
+    const data = await qualityApi.startRegen(props.taskId, pairs)
+    await pollRegen(data.regen_id)
+  } catch (e) {
+    console.error('Regen start failed:', e)
+  } finally {
+    isRegening.value = false
+  }
+}
+
+function pollRegen(regenId) {
+  return new Promise((resolve) => {
+    const timer = setInterval(async () => {
+      try {
+        const data = await qualityApi.getRegenStatus(regenId)
+
+        // Update per-row badges
+        for (const p of data.progress) {
+          regenProgress[`${p.lead_id}:${p.stage}`] = p.status
+        }
+
+        if (data.status !== 'running') {
+          clearInterval(timer)
+          // Clear selections
+          Object.keys(selectedForRegen).forEach((k) => {
+            selectedForRegen[k] = false
+          })
+          if (data.status === 'completed') {
+            emit('regen-complete')
+          }
+          resolve()
+        }
+      } catch (_e) {
+        // keep polling on network errors
+      }
+    }, 2000)
+  })
+}
+
+function regenBadgeClass(s) {
+  const st = regenProgress[regenKey(s)]
+  if (st === 'processing') return 'bg-warning text-dark'
+  if (st === 'done') return 'bg-success'
+  if (st === 'failed') return 'bg-danger'
+  return 'bg-secondary'
 }
 </script>

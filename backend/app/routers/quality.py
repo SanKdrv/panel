@@ -243,3 +243,47 @@ def _task_to_dict(task, include_samples: bool = False) -> dict:
 
 def _reset_for_tests() -> None:
     quality_service._reset_for_tests()
+
+
+# ----- selective regeneration (ФТ15) -----
+
+class RegenRequest(BaseModel):
+    task_id: str
+    pairs: list[dict]  # [{"lead_id": str, "stage": str}]
+
+
+@router.post("/regenerate")
+async def start_regen(
+    body: RegenRequest,
+    rag: RAGClient = Depends(get_rag_client),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        regen_id = await quality_service.start_regeneration(
+            rag, settings, body.task_id, body.pairs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"regen_id": regen_id, "status": "running"}
+
+
+@router.get("/regenerate/{regen_id}")
+async def get_regen_status(regen_id: str) -> dict:
+    state = quality_service.get_regen_state(regen_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="regen task not found")
+    return {
+        "regen_id": state.id,
+        "task_id": state.task_id,
+        "status": state.status,
+        "error": state.error,
+        "progress": [
+            {
+                "lead_id": p.lead_id,
+                "stage": p.stage,
+                "status": p.status,
+                "sample": p.sample,
+            }
+            for p in state.progress
+        ],
+    }

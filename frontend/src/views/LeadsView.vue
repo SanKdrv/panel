@@ -6,12 +6,30 @@
 
     <div class="card border-0 shadow-sm p-4 mb-4" style="max-width: 480px">
       <label class="form-label fw-semibold">Поиск лида</label>
+      <div class="btn-group w-100 mb-2" role="group">
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="mode === 'id' ? 'btn-primary' : 'btn-outline-primary'"
+          @click="mode = 'id'"
+        >
+          По ID
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="mode === 'email' ? 'btn-primary' : 'btn-outline-primary'"
+          @click="mode = 'email'"
+        >
+          По Email
+        </button>
+      </div>
       <div class="input-group">
         <input
           v-model="query"
           type="text"
           class="form-control"
-          placeholder="lead_id"
+          :placeholder="mode === 'id' ? 'lead_id' : 'email@example.com'"
           @keyup.enter="search"
         />
         <button class="btn btn-primary" @click="search">
@@ -30,7 +48,7 @@
       <div class="col-md-4">
         <div class="card border-0 shadow-sm p-4">
           <div class="fw-bold fs-5 mb-1">{{ lead.lead_id }}</div>
-          <div class="text-muted small mb-3">—</div>
+          <div class="text-muted small mb-3">{{ lead.email || '—' }}</div>
           <div class="d-flex flex-column gap-1">
             <div class="small">
               <span class="text-muted">Рекомендаций:</span>
@@ -145,6 +163,7 @@
 import { ref } from 'vue'
 import { leadsApi } from '../api/endpoints'
 
+const mode = ref('id')
 const query = ref('lead_00142')
 const lead = ref(null)
 const loading = ref(false)
@@ -157,7 +176,17 @@ async function search() {
   error.value = ''
   lead.value = null
   try {
-    lead.value = await leadsApi.card(query.value.trim())
+    let leadId = query.value.trim()
+    let email = null
+
+    if (mode.value === 'email') {
+      const resolved = await leadsApi.byEmail(leadId)
+      leadId = resolved.lead_id
+      email = resolved.email
+    }
+
+    const card = await leadsApi.card(leadId)
+    lead.value = { ...card, email }
   } catch (e) {
     error.value = e?.response?.data?.detail || e?.message || 'Ошибка'
   } finally {

@@ -8,10 +8,31 @@
       <div class="col-md-5">
         <div class="card border-0 shadow-sm p-4 h-100">
           <div class="mb-3">
-            <label class="form-label fw-semibold">
-              Идентификатор лида (lead_id)
-            </label>
-            <input v-model="leadId" type="text" class="form-control" />
+            <label class="form-label fw-semibold">Идентификатор лида</label>
+            <div class="btn-group w-100 mb-2" role="group">
+              <button
+                type="button"
+                class="btn btn-sm"
+                :class="mode === 'id' ? 'btn-primary' : 'btn-outline-primary'"
+                @click="mode = 'id'"
+              >
+                По ID
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm"
+                :class="mode === 'email' ? 'btn-primary' : 'btn-outline-primary'"
+                @click="mode = 'email'"
+              >
+                По Email
+              </button>
+            </div>
+            <input
+              v-model="leadInput"
+              type="text"
+              class="form-control"
+              :placeholder="mode === 'id' ? 'lead_id' : 'email@example.com'"
+            />
           </div>
           <div class="mb-4">
             <label class="form-label fw-semibold">Тип рекомендации</label>
@@ -82,6 +103,8 @@
 import { ref, computed, onUnmounted } from 'vue'
 import { generateApi, leadsApi } from '../api/endpoints'
 
+const mode = ref('id')
+const leadInput = ref('lead_00142')
 const leadId = ref('lead_00142')
 const type = ref('warm')
 
@@ -114,6 +137,13 @@ async function generate() {
   status.value = ''
   token.value = ''
   try {
+    // Resolve email → lead_id if needed
+    if (mode.value === 'email') {
+      const resolved = await leadsApi.byEmail(leadInput.value.trim())
+      leadId.value = resolved.lead_id
+    } else {
+      leadId.value = leadInput.value.trim()
+    }
     const data = await generateApi.trigger(leadId.value, type.value)
     token.value = data.token
     status.value = data.status || 'queued'

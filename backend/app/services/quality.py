@@ -393,6 +393,145 @@ def _reset_for_tests() -> None:
     _tasks = {}
 
 
+# ---------- selective regeneration (ФТ15) ----------
+
+@dataclass
+class RegenPairProgress:
+    lead_id: str
+    stage: str
+    status: str = "queued"      # queued | processing | done | failed
+    sample: dict | None = None
+
+
+@dataclass
+class RegenState:
+    id: str
+    task_id: str
+    status: str = "running"     # running | completed | failed
+    progress: list[RegenPairProgress] = field(default_factory=list)
+    error: str | None = None
+
+
+_regen_tasks: dict[str, RegenState] = {}
+
+
+def get_regen_state(regen_id: str) -> RegenState | None:
+    return _regen_tasks.get(regen_id)
+
+
+async def start_regeneration(
+    rag: RAGClient,
+    settings: Settings,
+    task_id: str,
+    pairs: list[dict],
+) -> str:
+    """Запускает выборочную перегенерацию пар из уже завершённой таски.
+    pairs: [{"lead_id": str, "stage": str}, ...].
+    Возвращает regen_id для polling."""
+    task = _tasks.get(task_id)
+    if not task:
+        raise ValueError(f"task {task_id!r} not found")
+    if not pairs:
+        raise ValueError("pairs list must not be empty")
+
+    regen_id = uuid.uuid4().hex[:12]
+    progress = [
+        RegenPairProgress(lead_id=str(p["lead_id"]), stage=str(p["stage"]))
+        for p in pairs
+    ]
+    state = RegenState(id=regen_id, task_id=task_id, progress=progress)
+    _regen_tasks[regen_id] = state
+
+    asyncio.create_task(_run_regeneration(regen_id, rag, settings))
+    return regen_id
+
+
+async def _run_regeneration(
+    regen_id: str,
+    rag: RAGClient,
+    settings: Settings,
+) -> None:
+    state = _regen_tasks[regen_id]
+    task = _tasks.get(state.task_id)
+
+    try:
+        # Prefer task's gold_snapshot for reproducibility; fall back to current dataset
+        gold_list: list[dict] = []
+        if task is not None and task.result and task.result.get("gold_snapshot"):
+            gold_list = task.result["gold_snapshot"]
+        else:
+            gold_list = gold_service.load(settings.quality_gold_dataset_path)
+
+        # Build stage → gold_entry map (last entry wins if duplicate stages)
+        entries_by_stage: dict[str, dict] = {e["stage"]: e for e in gold_list}
+
+        async with httpx.AsyncClient() as judge_client:
+            for pair_progress in state.progress:
+                pair_progress.status = "processing"
+                lead_id = pair_progress.lead_id
+                stage = pair_progress.stage
+
+                entry = entries_by_stage.get(stage)
+                if entry is None:
+                    pair_progress.status = "failed"
+                    pair_progress.sample = {
+                        "lead_id": lead_id,
+                        "stage": stage,
+                        "status": "failed",
+                        "error": f"gold entry for stage '{stage}' not found",
+                    }
+                    continue
+
+                try:
+                    sample = await _evaluate_one_pair(
+                        rag, judge_client, settings, lead_id, entry,
+                    )
+                    pair_progress.sample = sample
+                    pair_progress.status = (
+                        "done" if sample.get("status") == "ok" else "failed"
+                    )
+                except Exception as exc:
+                    pair_progress.status = "failed"
+                    pair_progress.sample = {
+                        "lead_id": lead_id,
+                        "stage": stage,
+                        "status": "failed",
+                        "error": _fmt_exc(exc),
+                    }
+
+        # Merge new samples into the original task and recalculate metrics
+        if task is not None:
+            new_samples = [p.sample for p in state.progress if p.sample]
+            new_map: dict[tuple[str, str], dict] = {
+                (s["lead_id"], s["stage"]): s for s in new_samples
+            }
+
+            updated: list[dict] = []
+            for s in task.samples:
+                key = (s.get("lead_id", ""), s.get("stage", ""))
+                if key in new_map:
+                    updated.append(new_map.pop(key))
+                else:
+                    updated.append(s)
+            # Pairs that weren't in original samples → append
+            updated.extend(new_map.values())
+
+            task.samples = updated
+            metrics = _aggregate(updated)
+            if task.result:
+                task.result["samples"] = updated
+                task.result["metrics"] = metrics
+
+            quality_history.save_task(task)
+
+        state.status = "completed"
+
+    except Exception as exc:
+        logger.exception("event=quality.regen.error regen_id=%s", regen_id)
+        state.status = "failed"
+        state.error = _fmt_exc(exc)
+
+
 # ---------- find leads ----------
 
 # ---------- lead search (async task) ----------
