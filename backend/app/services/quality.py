@@ -45,15 +45,12 @@ ODZ = {
 }
 
 JUDGE_PROMPT_TEMPLATE = (
-    "Ты — беспристрастный эксперт в digital-маркетинге. "
-    "Оцени, насколько СГЕНЕРИРОВАННЫЙ ответ уместен для стадии воронки продаж «{stage}» "
-    "и тематически соответствует ЭТАЛОНУ для этой стадии.\n"
-    "Шкала: 1.0 = ответ решает ту же задачу стадии и затрагивает те же темы, "
-    "0.0 = не соответствует стадии или совсем другая тема.\n"
-    "Стиль, длина и конкретные формулировки не важны — важна тема и цель сообщения.\n"
-    "Верни одно число от 0.0 до 1.0, без пояснений.\n\n"
-    "ЭТАЛОН: {reference}\n"
-    "СГЕНЕРИРОВАННЫЙ ОТВЕТ: {generated}\n\n"
+    "Оцени тематическое сходство двух текстов по шкале от 0.0 до 1.0.\n"
+    "Стиль, длина и формулировки не важны — оценивай только тему и предметную область.\n"
+    "1.0 — тексты об одном и том же, 0.5 — схожая область, 0.0 — совершенно разные темы.\n"
+    "Верни только число, без пояснений.\n\n"
+    "ТЕКСТ 1: {reference}\n"
+    "ТЕКСТ 2: {generated}\n\n"
     "ОЦЕНКА:"
 )
 
@@ -110,6 +107,25 @@ def context_precision(reference: str, generated: str) -> float:
     return round(len(ref_tokens & gen_tokens) / len(ref_tokens), 4)
 
 
+def _parse_judge_score(text: str) -> float | None:
+    """Извлекает оценку из ответа judge-модели.
+
+    Обрабатывает форматы:
+    - ``0.75``, ``1.0``, ``0`` — стандартный
+    - ``0,75`` — запятая как десятичный разделитель
+    - ``**0.7**``, ``Оценка: 0.85.`` — обёрнутые в текст/markdown
+    Возвращает float в [0, 1] или None если не распознано.
+    """
+    if not text:
+        return None
+    # Нормализуем: запятая-разделитель → точка (0,75 → 0.75)
+    normalized = re.sub(r"(\d),(\d)", r"\1.\2", text)
+    match = re.search(r"(?<![.\d])([01](?:\.\d+)?)(?![.\d])", normalized)
+    if match:
+        return max(0.0, min(1.0, float(match.group(1))))
+    return None
+
+
 async def call_judge(
     client: httpx.AsyncClient, url: str, model: str,
     stage: str, reference: str, generated: str,
@@ -125,11 +141,11 @@ async def call_judge(
         )
         resp.raise_for_status()
         text = resp.json().get("response", "").strip()
-        match = re.search(r"[01](?:\.\d+)?", text)
-        if not match:
-            logger.warning("event=quality.judge.no_score raw=%r", text[:100])
+        score = _parse_judge_score(text)
+        if score is None:
+            logger.warning("event=quality.judge.no_score raw=%r", text[:200])
             return 0.0
-        return max(0.0, min(1.0, float(match.group(0))))
+        return score
     except Exception as exc:
         logger.warning("event=quality.judge.error error=%s", exc)
         return 0.0
